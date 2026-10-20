@@ -4577,8 +4577,158 @@ bot.hears(/^\.отн прогулка$/, async (ctx) => {
 bot.hears('/pingtest', (ctx) => ctx.reply('pong!'));
 
   
-async function startBot() {
+// =============================================================
+// 1. НА ТИВНЫЙ HTTP HEALTH-СЕРВЕР ДЛЯ RENDER.COM
+// =============================================================
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+
+function getDbStatusText(state) {
+  switch (state) {
+    case 0: return 'disconnected';
+    case 1: return 'connected';
+    case 2: return 'connecting';
+    case 3: return 'disconnecting';
+    default: return 'unknown';
+  }
+}
+
+const server = http.createServer((req, res) => {
+  const url = req.url ? req.url.split('?')[0] : '/';
+
+  // 1. Быстрый эндпоинт для UptimeRobot / Cron
+  if (req.method === 'GET' && url === '/ping') {
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
+    res.end('pong');
+    return;
+  }
+
+  // 2. Детальный статус базы данных и uptime
+  if (req.method === 'GET' && url === '/health') {
+    const dbState = Mongoose.connection.readyState;
+    const isHealthy = dbState === 1;
+
+    const payload = JSON.stringify({
+      status: isHealthy ? 'ok' : 'degraded',
+      uptime: Math.floor(process.uptime()),
+      database: {
+        type: 'MongoDB',
+        status: getDbStatusText(dbState),
+        readyState: dbState
+      },
+      timestamp: new Date().toISOString()
+    }, null, 2);
+
+    res.writeHead(isHealthy ? 200 : 503, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
+    res.end(payload);
+    return;
+  }
+
+  // 3. Главная страница с информацией о сервисе
+  if (req.method === 'GET' && url === '/') {
+    const payload = JSON.stringify({
+      service: 'Grizzly Game Bot',
+      status: 'running',
+      uptime: `${Math.floor(process.uptime())}s`,
+      endpoints: {
+        ping: '/ping',
+        health: '/health'
+      }
+    }, null, 2);
+
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
+    res.end(payload);
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('Not Found');
+});
+
+// =============================================================
+// 2. АВТО-ПОВТОР ПРИ 409 CONFLICT (TELEGRAM POLLING)
+// =============================================================
+async function launchWithRetry(botInstance, maxRetries = 5, delayMs = 4000) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[Telegram] Попытка запуска бота #${attempt}...`);
+      await botInstance.launch();
+      console.log('✅ Гризли бот успешно запущен и слушает Telegram!');
+      return;
+    } catch (err) {
+      const isConflict = err.response?.error_code === 409 ||
+                         (err.message && err.message.includes('409')) ||
+                         (err.description && err.description.includes('Conflict'));
+
+      if (isConflict && attempt < maxRetries) {
+        console.warn(`⚠️ [409 Conflict] Предыдущий контейнер на Render ещё держит Telegram сессию. Ожидание ${delayMs / 1000} сек... (Попытка ${attempt}/${maxRetries})`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      } else {
+        console.error(`❌ Критическая ошибка запуска бота (попытка ${attempt}/${maxRetries}):`, err);
+        throw err;
+      }
+    }
+  }
+}
+
+// =============================================================
+// 3. GRACEFUL SHUTDOWN (КОРРЕКТНОЕ ЗАВЕРШЕНИЕ)
+// =============================================================
+let isShuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`\n🛑 Получен сигнал ${signal}. Завершение работы сервиса...`);
+
+  // 1. Остановка HTTP health-сервера
+  if (server && server.listening) {
+    server.close(() => {
+      console.log('HTTP health-сервер остановлен.');
+    });
+  }
+
+  // 2. Остановка Telegram бота
   try {
+    bot.stop(signal);
+    console.log('Telegram бот остановлен.');
+  } catch (err) {
+    console.error('Ошибка остановки Telegram бота:', err);
+  }
+
+  // 3. Закрытие соединения с MongoDB
+  try {
+    await Mongoose.connection.close(false);
+    console.log('Соединение с MongoDB закрыто.');
+  } catch (err) {
+    console.error('Ошибка закрытия соединения с MongoDB:', err);
+  }
+
+  process.exit(0);
+}
+
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// =============================================================
+// 4. СТАРТ ПРИЛОЖЕНИЯ
+// =============================================================
+async function startApp() {
+  // Запуск HTTP-сервера ДО старта бота, чтобы Render мгновенно увидел открытый порт
+  server.listen(PORT, () => {
+    console.log(`🚀 HTTP Health-сервер запущен на порту ${PORT}`);
+  });
+
+  try {
+    console.log('Подключение к MongoDB...');
     await Mongoose.connect(MONGODB_URI, {
       maxPoolSize: 10,
       minPoolSize: 2,
@@ -4586,17 +4736,13 @@ async function startBot() {
       socketTimeoutMS: 45000,
       family: 4
     });
-    console.log('Успешное подключение к MongoDB');
+    console.log('✅ Успешное подключение к MongoDB');
 
-    await bot.launch();
-    console.log('Гризли бот успешно запущен!');
+    await launchWithRetry(bot, 5, 4000);
   } catch (error) {
-    console.error('Ошибка при запуске бота или базы данных:', error);
+    console.error('Критическая ошибка запуска приложения:', error);
     process.exit(1);
   }
 }
 
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-startBot();
+startApp();

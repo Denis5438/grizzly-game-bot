@@ -2,7 +2,7 @@
   "name": "discovered-tested-angora",
   "version": "0.1.0",
   "description": "A simple Node app built on fastify, instantly up and running. Built to be remixed on Glitch.com.",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "start:platform": "node src/bot.js"
@@ -39,7 +39,7 @@
     "ytdl-core": "^4.11.5"
   },
   "engines": {
-    "node": "16.x"
+    "node": ">=18.0.0"
   },
   "repository": {
     "url": "https://glitch.com/edit/#!/discovered-tested-angora"
