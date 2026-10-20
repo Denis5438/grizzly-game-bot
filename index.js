@@ -1198,335 +1198,86 @@ bot.hears(/^\.сдб\s*(@\w+)?$/i, async (ctx) => {
   await ctx.replyWithPhoto({ source: image }, { caption, parse_mode: 'Markdown' });
 }).catch(error => console.log("Error:", error));
 
-//gpt
-/*const OpenAI = require('openai');
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '',
-});*/
-
-
-bot.hears(/^\.gpt\s?$/i, async (ctx) => {
-  const message = '💡 • Пример команда .gpt привет \n если вдруг в этом боте не работает GPT, вы можете GPT использовать в этом боте - <a href="https://t.me/act_chat_bot?start=ref_6540555219">@act_chat_bot</a>';
-  return ctx.reply(message, { parse_mode: 'HTML', disable_web_page_preview: true });
-});
-
-// Подключение модуля для работы с сессиями
-bot.use(session());
+// ==========================================
+// ИНТЕГРАЦИЯ GOOGLE GEMINI AI (.gpt / .ai)
+// ==========================================
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Определение схемы и модели диалогов
 const dialoggptSchema = new Mongoose.Schema({
-  userId: String,
+  userId: { type: String, required: true, index: true },
   messages: Array,
 });
 
-// ⚡ ОПТИМИЗАЦИЯ: Индекс для быстрого поиска диалогов
 dialoggptSchema.index({ userId: 1 });
-
 const Dialoggpt = Mongoose.model('Dialoggpt', dialoggptSchema);
-//const MAX_INACTIVITY_TIME = 15 * 60 * 1000; // 15 минут
 
-// Команда для очистки диалога пользователя
+// Функция обращения к Google Gemini API
+async function askGemini(prompt, history = []) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('Ключ GEMINI_API_KEY не задан в переменных окружения.');
+  }
+
+  // Преобразуем историю диалога в формат Gemini
+  const contents = [];
+  if (Array.isArray(history)) {
+    for (const msg of history) {
+      if (msg && msg.role && msg.content) {
+        contents.push({
+          role: msg.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: String(msg.content) }]
+        });
+      }
+    }
+  }
+
+  // Добавляем текущий запрос пользователя
+  contents.push({
+    role: 'user',
+    parts: [{ text: prompt }]
+  });
+
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=' + apiKey;
+
+  const response = await axios.post(url, {
+    contents,
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 2048
+    }
+  }, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 30000
+  });
+
+  const candidate = response.data?.candidates?.[0];
+  const replyText = candidate?.content?.parts?.[0]?.text;
+  if (!replyText) {
+    throw new Error('Не удалось получить ответ от Gemini API');
+  }
+  return replyText;
+}
+
+// Справка по командам нейросети
+bot.hears(/^\.(gpt|ai|гемини)\s?$/i, async (ctx) => {
+  const message = '💡 • Пример команды: `.gpt привет` или `.ai расскажи факт`\n🤖 Бот работает на базе **Google Gemini 1.5 Flash**!\n🗑 Для сброса контекста: `.new`';
+  return ctx.reply(message, { parse_mode: 'Markdown' });
+});
+
+// Сброс контекста диалога
 bot.hears(/^\.new\s?$/i, async (ctx) => {
   const userId = ctx.from.id;
-
   try {
-    // Удаление диалога пользователя из базы данных
-    await Dialoggpt.deleteMany({ userId: userId });
-
-
-    await ctx.reply('Диалог сброшен. Теперь вы можете начать новый диалог с GPT.');
+    await Dialoggpt.deleteMany({ userId: String(userId) });
+    await ctx.reply('🧹 Диалог сброшен. Теперь вы можете начать новый разговор с Gemini.');
   } catch (e) {
-    console.error(e.message);
+    console.error('Ошибка сброса диалога:', e.message);
     await ctx.reply('При очистке диалога произошла ошибка. Пожалуйста, повторите попытку позже.');
   }
 });
 
-const MAX_MESSAGE_LENGTH = 4096; // Максимальная длина сообщения в Телеграме  */
-
-/*bot.hears(/^\.gpt\s([\s\S]*)$/mi, async (ctx) => {
-
-  const userId = ctx.from.id;
-  const user = await User.findOne({ telegramId: userId });
-  const currentTime = Date.now();
-  const minTimeBetweenRequests = 20 * 1000; // 20 секунд в миллисекундах
-
-  if (user.userRequestInfo.lastRequestTime) {
-    const timeSinceLastRequest = currentTime - user.userRequestInfo.lastRequestTime;
-    if (timeSinceLastRequest < minTimeBetweenRequests) {
-      const remainingTime = Math.ceil((minTimeBetweenRequests - timeSinceLastRequest) / 1000); // Время в секундах
-      await ctx.reply(`Пожалуйста, не отправляйте запросы слишком часто. В GPT-3.5-turbo есть ограничение в 3 запроса в минуту. Подождите ещё ${remainingTime} секунд.`);
-      return;
-    }
-  }
-  const waitMessage = await ctx.reply('⌛️');
-  try {
-    const message = ctx.match[1];
-
-
-    // Поиск активного диалога в базе данных
-    let userDialog = await Dialoggpt.findOne({ userId: userId });
-
-
-
-    if (!user) {
-      // Обработка ошибки, если пользователь не найден
-      ctx.reply('Вы не зарегистрированы в боте.');
-      return;
-    }
-
-    // Проверка времени до следующего дня для сброса лимита запросов
-    const resetTime = new Date(user.userRequestInfo.lastRequestTime);
-    resetTime.setHours(0, 0, 0, 0);
-
-    if (resetTime.getTime() + 24 * 60 * 60 * 1000 <= currentTime) {
-      // Если текущее время больше времени сброса, сбрасываем счетчик запросов и обновляем дату сброса
-      user.userRequestInfo.requests = user.userRequestInfo.limit;
-      user.userRequestInfo.lastRequestTime = currentTime;
-      await user.save();
-    }
-
-    // Проверка лимита запросов
-    if (user && user.userRequestInfo.requests <= 0) {
-      // Рассчитываем время ожидания
-      const timeUntilReset = calculateTimeUntilReset(user.userRequestInfo.lastRequestTime, currentTime);
-      const message15 = `Вы исчерпали свой дневной лимит запросов. Вы сможете продолжить через ${timeUntilReset}.`;
-      await ctx.telegram.editMessageText(ctx.chat.id, waitMessage.message_id, null, message15);
-    } else {
-      // Обработка запроса и увеличение счетчика запросов
-      if (user) {
-        user.userRequestInfo.requests--;
-        user.userRequestInfo.lastRequestTime = currentTime;
-        user.save();
-      }
-
-      // Проверка длины сообщения
-      if (message.length <= MAX_MESSAGE_LENGTH) {
-        // Если длина сообщения не превышает максимальную, отправляем его целиком
-        await processMessage(ctx, waitMessage, userId, message);
-      } else {
-        // Если длина сообщения превышает максимальную, разделяем его на части и отправляем по частям
-        const chunks = splitTextIntoChunks(message, MAX_MESSAGE_LENGTH);
-        for (const chunk of chunks) {
-          await processMessage(ctx, waitMessage, userId, chunk);
-        }
-      }
-    }
-  } catch (e) {
-    console.error(e.message);
-    //const errormessage = 'При генерации ответа произошла ошибка. Пожалуйста, повторите попытку позже.';
-    const errormessage = e.message;
-    await ctx.telegram.editMessageText(ctx.chat.id, waitMessage.message_id, null, errormessage);
-  }
-}).catch(error => console.log(error));*/
-
-
-/*bot.hears(/^\.gpt\s([\s\S]*)$/mi, async (ctx) => {
-
-  const userId = ctx.from.id;
-  const user = await User.findOne({ telegramId: userId });
-  const currentTime = Date.now();
-  const minTimeBetweenRequests = 20 * 1000; // 20 секунд в миллисекундах
-
-  if (user.userRequestInfo.lastRequestTime) {
-    const timeSinceLastRequest = currentTime - user.userRequestInfo.lastRequestTime;
-    if (timeSinceLastRequest < minTimeBetweenRequests) {
-      const remainingTime = Math.ceil((minTimeBetweenRequests - timeSinceLastRequest) / 1000); // Время в секундах
-      await ctx.reply(`Пожалуйста, не отправляйте запросы слишком часто. В GPT-3.5-turbo есть ограничение в 3 запроса в минуту. Подождите ещё ${remainingTime} секунд.`);
-      return;
-    }
-  }
-  const imageUrl = 'https://www.bing.com/rp/fY0wJ-QaIKghQ87Qs9ufsshTAws.png';
-
-  const waitMessage = await ctx.replyWithPhoto({ url: imageUrl }, { caption: 'Ваше текст генерируется' });
-  //const waitMessage = await ctx.reply('⌛️');
-  try {
-    const message = ctx.match[1];
-
-
-    // Поиск активного диалога в базе данных
-    let userDialog = await Dialoggpt.findOne({ userId: userId });
-
-
-
-    if (!user) {
-      // Обработка ошибки, если пользователь не найден
-      ctx.reply('Вы не зарегистрированы в боте.');
-      return;
-    }
-
-    // Проверка лимита запросов
-    if (user.userRequestInfo.gptcoin <= 0) {
-      // Рассчитываем время ожидания
-      const timeUntilReset = calculateTimeUntilReset(user.userRequestInfo.lastRequestTime, currentTime);
-      const message15 = `Вы исчерпали свои GPTCoin. Напишите ".donate", чтобы узнать больше.`;
-      //await ctx.telegram.editMessageText(ctx.chat.id, waitMessage.message_id, null, message15);
-      await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-      await ctx.reply(message15);
-    } else {
-      // Обработка запроса и увеличение счетчика запросов
-      if (user) {
-        user.userRequestInfo.gptcoin--;
-       await user.save();
-      }
-
-      // Проверка длины сообщения
-      if (message.length <= MAX_MESSAGE_LENGTH) {
-        // Если длина сообщения не превышает максимальную, отправляем его целиком
-        await processMessage(ctx, waitMessage, userId, message);
-      } else {
-        // Если длина сообщения превышает максимальную, разделяем его на части и отправляем по частям
-        const chunks = splitTextIntoChunks(message, MAX_MESSAGE_LENGTH);
-        for (const chunk of chunks) {
-          await processMessage(ctx, waitMessage, userId, chunk);
-        }
-      }
-    }
-  } catch (e) {
-    console.error(e.message);
-    //const errormessage = 'При генерации ответа произошла ошибка. Пожалуйста, повторите попытку позже.';
-    const errormessage = e.message;
-    //await ctx.telegram.editMessageText(ctx.chat.id, waitMessage.message_id, null, errormessage);
-    await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-    await ctx.reply(errormessage);
-  }
-}).catch(error => console.log(error));
-
-// Функция для расчета времени ожидания до сброса лимита
-function calculateTimeUntilReset(lastRequestTime, currentTime) {
-  // Вычисляем дату и время начала следующего дня
-  const nextDay = new Date(lastRequestTime);
-  nextDay.setDate(nextDay.getDate() + 1);
-  nextDay.setHours(0, 0, 0, 0);
-
-  // Вычисляем разницу между текущим временем и временем сброса лимита
-  const timeUntilReset = new Date(nextDay - currentTime);
-
-  // Получаем разницу в часах, минутах и секундах
-  const hours = timeUntilReset.getUTCHours();
-  const minutes = timeUntilReset.getUTCMinutes();
-  const seconds = timeUntilReset.getUTCSeconds();
-
-  // Форматируем результат в "часы минуты секунды"
-  return `${hours} часов ${minutes} минут ${seconds} секунд`;
-}
-
-async function processMessage(ctx, waitMessage, userId, message) {
-  // Получение диалога пользователя из базы данных
-  const dialog = await Dialoggpt.findOne({ userId: userId });
-
-  let messageHistory = [];
-
-  if (dialog) {
-    messageHistory = dialog.messages;
-  }
-
-  const completion = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo-16k",
-    messages: [
-      ...messageHistory,
-      { role: "assistant", content: message }
-    ],
-    temperature: 0.5,
-  });
-
-  const answer = completion.choices[0].message.content;
-
-  // Проверка количества контекстов и удаление самого первого, если их больше 10
-  if (dialog && dialog.messages.length >= 20) {
-    dialog.messages.shift(); // Удаляем самый первый контекст
-  }
-
-  // Сохранение диалога в базе данных
-  if (dialog) {
-    dialog.messages.push({ role: 'user', content: message });
-    dialog.messages.push({ role: 'assistant', content: answer });
-    await dialog.save();
-  } else {
-    const newDialog = new Dialoggpt({
-      userId: userId,
-      messages: [
-        { role: 'user', content: message },
-        { role: 'assistant', content: answer }
-      ],
-    });
-    await newDialog.save();
-  }
-  let user = await User.findOne({ telegramId: ctx.from.id });
-  const inlineKeyboard = {
-    inline_keyboard: [
-      [
-        { text: 'Отменить', callback_data: `cancel:${ctx.from.id}`, }
-      ]
-    ]
-  };
-  //await ctx.telegram.editMessageText(ctx.chat.id, waitMessage.message_id, null, `[${user.nickname}](tg://user?id=${ctx.from.id}),\n👤 Вопрос: ${message}\n\n🤖 Ответ: \`${answer}\``, { parse_mode: 'Markdown',  reply_markup: inlineKeyboard});
-  const userLimit = user.userRequestInfo.limit; // Получаем лимит запросов из базы данных
-  const usedRequests = user.userRequestInfo.requests;
-
-  const messageText = `[${user.nickname}](tg://user?id=${ctx.from.id}),
-👤 Вопрос: ${message}
-
-🤖 Ответ: ${'```GPT3.5-turbo\n' + answer + '```'}
-
-📤 Осталось: ${user.userRequestInfo.gptcoin} GptCoin.`;
-  //await ctx.telegram.editMessageText(ctx.chat.id, waitMessage.message_id, null, messageText, { parse_mode: 'Markdown', reply_markup: inlineKeyboard });
-  await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-  await ctx.reply(messageText, { parse_mode: 'Markdown', reply_markup: inlineKeyboard });
-} */
-bot.hears(/^\.gpt\s([\s\S]*)$/mi, async (ctx) => {
-  const userId = ctx.from.id;
-  const user = await User.findOne({ telegramId: userId });
-  const currentTime = Date.now();
-  const minTimeBetweenRequests = 20 * 1000; // 20 секунд в миллисекундах
-
-  if (user.userRequestInfo.lastRequestTime) {
-    const timeSinceLastRequest = currentTime - user.userRequestInfo.lastRequestTime;
-    if (timeSinceLastRequest < minTimeBetweenRequests) {
-      const remainingTime = Math.ceil((minTimeBetweenRequests - timeSinceLastRequest) / 1000); // Время в секундах
-      await ctx.reply(`Пожалуйста, не отправляйте запросы слишком часто. В GPT-3.5-turbo есть ограничение в 3 запроса в минуту. Подождите ещё ${remainingTime} секунд.`);
-      return;
-    }
-  }
-
-  const imageUrl = 'https://www.bing.com/rp/fY0wJ-QaIKghQ87Qs9ufsshTAws.png';
-  const waitMessage = await ctx.replyWithPhoto({ url: imageUrl }, { caption: 'Ваше текст генерируется' });
-
-  try {
-    const message = ctx.match[1];
-
-    let userDialog = await Dialoggpt.findOne({ userId: userId });
-
-    if (!user) {
-      ctx.reply('Вы не зарегистрированы в боте.');
-      return;
-    }
-
-    if (user.userRequestInfo.gptcoin <= 0) {
-      const timeUntilReset = calculateTimeUntilReset(user.userRequestInfo.lastRequestTime, currentTime);
-      const message15 = `Вы исчерпали свои GPTCoin. Напишите ".donate", чтобы узнать больше.`;
-      await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-      await ctx.reply(message15);
-    } else {
-      user.userRequestInfo.gptcoin--;
-      await user.save();
-
-      if (message.length <= MAX_MESSAGE_LENGTH) {
-        await processMessage(ctx, waitMessage, userId, message);
-      } else {
-        const chunks = splitTextIntoChunks(message, MAX_MESSAGE_LENGTH);
-        for (const chunk of chunks) {
-          await processMessage(ctx, waitMessage, userId, chunk);
-        }
-      }
-    }
-  } catch (e) {
-    console.error(e.message);
-    const errormessage = e.message;
-    await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-    await ctx.reply(errormessage);
-  }
-}).catch(error => console.log(error));
+const MAX_MESSAGE_LENGTH = 4000;
 
 function calculateTimeUntilReset(lastRequestTime, currentTime) {
   const nextDay = new Date(lastRequestTime);
@@ -1534,61 +1285,80 @@ function calculateTimeUntilReset(lastRequestTime, currentTime) {
   nextDay.setHours(0, 0, 0, 0);
 
   const timeUntilReset = new Date(nextDay - currentTime);
-
   const hours = timeUntilReset.getUTCHours();
   const minutes = timeUntilReset.getUTCMinutes();
   const seconds = timeUntilReset.getUTCSeconds();
 
-  return `${hours} часов ${minutes} минут ${seconds} секунд`;
+  return `${hours} ч. ${minutes} м. ${seconds} с.`;
 }
 
-async function processMessage(ctx, waitMessage, userId, message) {
-  const dialog = await Dialoggpt.findOne({ userId: userId });
+// Обработка текстовых запросов к Gemini
+bot.hears(/^\.(gpt|ai|гемини)\s([\s\S]*)$/mi, async (ctx) => {
+  const userId = ctx.from.id;
+  const user = await User.findOne({ telegramId: userId });
+  const currentTime = Date.now();
+  const minTimeBetweenRequests = 5 * 1000; // 5 секунд
 
-  let messageHistory = [];
-
-  if (dialog) {
-    messageHistory = dialog.messages;
+  if (!user) {
+    return ctx.reply('Вы не зарегистрированы в боте.');
   }
 
-  let token = 'act-actChat';
-  let model = 'gpt-4';
-  let messages = [...messageHistory, { role: 'user', content: message }];
-  let temperature = 0.8;
-  let n = 1;
-  let stream = false;
-  let stop = null;
-
-  axios.post('http://5.42.75.19:3000/v1/chat/completions', {
-    model,
-    messages,
-    temperature,
-    stream,
-    stop
-  }, {
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + token
+  if (user.userRequestInfo.lastRequestTime) {
+    const timeSinceLastRequest = currentTime - user.userRequestInfo.lastRequestTime;
+    if (timeSinceLastRequest < minTimeBetweenRequests) {
+      const remainingTime = Math.ceil((minTimeBetweenRequests - timeSinceLastRequest) / 1000);
+      return ctx.reply(`⏳ Пожалуйста, подождите ещё ${remainingTime} сек. перед следующим запросом.`);
     }
-  })
-  .then(async response => {
-    const answer = response.data;
-    console.log(answer);
-    if (dialog && dialog.messages.length >= 20) {
-      dialog.messages.shift(); // Удаляем самый первый контекст
+  }
+
+  const waitMessage = await ctx.reply('⌛️ Gemini думает над ответом...');
+
+  try {
+    const message = ctx.match[2];
+
+    if (user.userRequestInfo.gptcoin <= 0) {
+      const timeUntilReset = calculateTimeUntilReset(user.userRequestInfo.lastRequestTime, currentTime);
+      await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
+      return ctx.reply(`Вы исчерпали свои GPTCoin. Сброс лимита через: ${timeUntilReset}.`);
     }
 
+    user.userRequestInfo.gptcoin--;
+    user.userRequestInfo.lastRequestTime = currentTime;
+    await user.save();
+
+    await processMessage(ctx, waitMessage, userId, message);
+  } catch (e) {
+    console.error('Ошибка в обработчике GPT:', e.message);
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
+    } catch (_) {}
+    await ctx.reply('Произошла ошибка при обработке запроса.');
+  }
+});
+
+async function processMessage(ctx, waitMessage, userId, message) {
+  const dialog = await Dialoggpt.findOne({ userId: String(userId) });
+  let messageHistory = dialog && Array.isArray(dialog.messages) ? dialog.messages : [];
+
+  try {
+    const answer = await askGemini(message, messageHistory);
+
+    // Сохраняем диалог (до 20 сообщений в контексте)
     if (dialog) {
+      if (dialog.messages.length >= 20) {
+        dialog.messages.shift();
+        dialog.messages.shift();
+      }
       dialog.messages.push({ role: 'user', content: message });
       dialog.messages.push({ role: 'assistant', content: answer });
       await dialog.save();
     } else {
       const newDialog = new Dialoggpt({
-        userId: userId,
+        userId: String(userId),
         messages: [
           { role: 'user', content: message },
           { role: 'assistant', content: answer }
-        ],
+        ]
       });
       await newDialog.save();
     }
@@ -1597,30 +1367,31 @@ async function processMessage(ctx, waitMessage, userId, message) {
     const inlineKeyboard = {
       inline_keyboard: [
         [
-          { text: 'Отменить', callback_data: `cancel:${ctx.from.id}`, }
+          { text: '🗑 Сбросить диалог', callback_data: `cancel:${ctx.from.id}` }
         ]
       ]
     };
 
-    const userLimit = user.userRequestInfo.limit;
-    const usedRequests = user.userRequestInfo.requests;
+    const gptcoins = user?.userRequestInfo?.gptcoin ?? 0;
+    const userNick = user?.nickname || 'Пользователь';
 
-    const messageText = `[${user.nickname}](tg://user?id=${ctx.from.id}),
-👤 Вопрос: ${message}
-
-🤖 Ответ: ${'```GPT4\n\n' + answer + '```'}
-
-📤 Осталось: ${user.userRequestInfo.gptcoin} GptCoin.`;
+    // Форматируем ответ безопасно
+    const messageText = `[${userNick}](tg://user?id=${ctx.from.id}),\n<b>👤 Вопрос:</b> ${message}\n\n<b>🤖 Ответ (Gemini):</b>\n${answer}\n\n📤 <b>Осталось:</b> ${gptcoins} GptCoin.`;
 
     await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-    await ctx.reply(messageText, { parse_mode: 'Markdown', reply_markup: inlineKeyboard });
-  })
-  .catch(async error => {
-    console.error(error.message);
-    const errormessage = 'При генерации ответа произошла ошибка. Пожалуйста, повторите попытку позже.';
-    await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
-    await ctx.reply(errormessage);
-  });
+    await ctx.reply(messageText, { parse_mode: 'HTML', reply_markup: inlineKeyboard });
+  } catch (error) {
+    console.error('Ошибка вызова Gemini:', error.response?.data || error.message);
+    let errMsg = 'При генерации ответа через Gemini произошла ошибка.';
+    const apiError = error.response?.data?.error?.message;
+    if (apiError) {
+      errMsg += `\n⚠️ Причина: ${apiError}`;
+    }
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, waitMessage.message_id);
+    } catch (_) {}
+    await ctx.reply(errMsg);
+  }
 }
 
 bot.action(/^cancel:(\d+)$/i, async (ctx) => {
