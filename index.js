@@ -1209,7 +1209,6 @@ const dialoggptSchema = new Mongoose.Schema({
   messages: Array,
 });
 
-dialoggptSchema.index({ userId: 1 });
 const Dialoggpt = Mongoose.model('Dialoggpt', dialoggptSchema);
 
 // Функция обращения к Google Gemini API
