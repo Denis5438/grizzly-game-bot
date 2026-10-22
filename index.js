@@ -2191,35 +2191,42 @@ bot.hears(/\.yt\s*(.*)$/i, async (ctx) => {
 }).catch(error => console.log(error));
 
 bot.action(/^cancelyt:(\d+)$/i, async (ctx) => {
-  const userId = ctx.from.id;
-  const message_id = ctx.update.callback_query.message.message_id;
-  const userIdFromCallback = parseInt(ctx.match[1], 10);
+  try {
+    const userId = ctx.from.id;
+    const message_id = ctx.update?.callback_query?.message?.message_id;
+    const userIdFromCallback = parseInt(ctx.match[1], 10);
 
-  // Проверяем, что владелец запроса совпадает с userId
-  const request = await Request.findOne({ userId: userId });
+    // Проверяем, что владелец запроса совпадает с userId
+    const request = await Request.findOne({ userId: userId });
 
-  if (request) {
-    if (userId === userIdFromCallback) {
-      // Удаление запроса из базы данных
-      await Request.deleteOne({ userId: userId });
+    if (request) {
+      if (userId === userIdFromCallback) {
+        // Удаление запроса из базы данных
+        await Request.deleteOne({ userId: userId });
 
-      // Отправляем сообщение об отмене запроса
-      const user1 = await User.findOne({ telegramId: userId });
-      const cancelMessage = `[${user1.nickname}](tg://user?id=${userId}),\nВаш запрос был отменен.`;
+        // Отправляем сообщение об отмене запроса
+        const user1 = await User.findOne({ telegramId: userId });
+        const userName = user1?.nickname || ctx.from.first_name || 'Пользователь';
+        const cancelMessage = `[${userName}](tg://user?id=${userId}),\nВаш запрос был отменен.`;
 
-      // Используем метод editMessageText для редактирования сообщения
-      await ctx.telegram.editMessageText(ctx.chat.id, message_id, null, cancelMessage, {
-        parse_mode: 'Markdown'
-      });
+        // Используем метод editMessageText для редактирования сообщения
+        if (message_id && ctx.chat) {
+          await ctx.telegram.editMessageText(ctx.chat.id, message_id, null, cancelMessage, {
+            parse_mode: 'Markdown'
+          });
+        }
+      } else {
+        // Если владелец запроса не совпадает с userId, отправляем уведомление об ошибке
+        const errorMessage = 'Вы не можете отменить этот запрос, так как он не ваш.';
+        await ctx.answerCbQuery(errorMessage);
+      }
     } else {
-      // Если владелец запроса не совпадает с userId, отправляем уведомление об ошибке
-      const errorMessage = 'Вы не можете отменить этот запрос, так как он не ваш.';
+      // Если запрос не найден, отправляем уведомление об ошибке
+      const errorMessage = 'У вас нет активных запросов для отмены.';
       await ctx.answerCbQuery(errorMessage);
     }
-  } else {
-    // Если запрос не найден, отправляем уведомление об ошибке
-    const errorMessage = 'У вас нет активных запросов для отмены.';
-    await ctx.answerCbQuery(errorMessage);
+  } catch (cancelErr) {
+    console.error('Ошибка при отмене запроса cancelyt:', cancelErr.message);
   }
 });
 
@@ -2230,18 +2237,38 @@ const userRequests = {}; // добавляем объект для хранен�
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 const ffmpeg = require('fluent-ffmpeg');
 ffmpeg.setFfmpegPath(ffmpegPath);
-const unlinkAsync = util.promisify(fs.unlink);
+
+function safeDeleteFile(filePath) {
+  if (filePath && fs.existsSync(filePath)) {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (e) {
+      console.error(`Ошибка при удалении ${filePath}:`, e.message);
+    }
+  }
+}
 
 async function processNextRequest() {
-  try {
-    if (isUploading) return;
+  if (isUploading) return;
+  if (Mongoose.connection.readyState !== 1) return;
 
+  let currentRequest = null;
+  const uniqueId = Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const videoPath = `video_${uniqueId}.mp4`;
+  const audioPath = `audio_${uniqueId}.mp4`;
+  const mergedPath = `merged_${uniqueId}.mp4`;
+
+  try {
     const request = await Request.findOne({ status: 'pending' }).sort({ createdAt: 'asc' });
     if (!request) return;
 
+    currentRequest = request;
     const { videoLink, userId } = request;
+
     if (userRequests[userId]) {
-      await bot.telegram.sendMessage(userId, 'Вы уже отправили запрос, пожалуйста, подождите, пока он будет выполнен.');
+      try {
+        await bot.telegram.sendMessage(userId, 'Вы уже отправили запрос, пожалуйста, подождите, пока он будет выполнен.');
+      } catch (e) {}
       await Request.findByIdAndUpdate(request._id, { status: 'rejected' });
       return;
     }
@@ -2251,28 +2278,24 @@ async function processNextRequest() {
 
     const videoInfo = await ytdl.getInfo(videoLink);
     const videoFormats = videoInfo.formats.filter(format => format.container === 'mp4' && format.qualityLabel && format.height <= 1080);
-    videoFormats.sort((a, b) => b.height - a.height);
-    const videoFormat = videoFormats[0];
-    const videoUrl = videoFormat.url;
-    const audioFormat = ytdl.chooseFormat(videoInfo.formats, { filter: format => format.audioBitrate });
-    const audioUrl = audioFormat.url;
+    videoFormats.sort((a, b) => (b.height || 0) - (a.height || 0));
+    const videoFormat = videoFormats[0] || ytdl.chooseFormat(videoInfo.formats, { quality: 'highestvideo' });
+    const audioFormat = ytdl.chooseFormat(videoInfo.formats, { filter: 'audioonly' }) || ytdl.chooseFormat(videoInfo.formats, { filter: format => format.audioBitrate });
 
-    if (videoFormat.contentLength > 1000000000) {
+    if (!videoFormat || !videoFormat.url || !audioFormat || !audioFormat.url) {
+      throw new Error('Не удалось найти подходящий формат видео или аудио.');
+    }
+
+    if (videoFormat.contentLength && Number(videoFormat.contentLength) > 1000000000) {
       await bot.telegram.sendMessage(userId, 'Ваш запрос был удален, так как видео слишком большое.');
       await Request.findByIdAndDelete(request._id);
-      userRequests[userId] = false;
-      isUploading = false;
       return;
     }
 
-    const videoPath = 'video.mp4';
-    const audioPath = 'audio.mp4';
-    const mergedPath = 'merged.mp4';
-
     // Загружаем видео и аудио файлы параллельно
     await Promise.all([
-      downloadFile(videoUrl, videoPath),
-      downloadFile(audioUrl, audioPath)
+      downloadFile(videoFormat.url, videoPath),
+      downloadFile(audioFormat.url, audioPath)
     ]);
 
     // Объединяем видео и аудио с помощью ffmpeg
@@ -2280,55 +2303,51 @@ async function processNextRequest() {
 
     // Отправляем объединенное видео в Telegram
     await bot.telegram.sendMessage(userId, 'Начинаю загрузку видео...');
-    const chatId = userId;
-    const videoCaption = `Название видео: ${videoInfo.videoDetails.title}\nАвтор: ${videoInfo.videoDetails.author.name}`;
+    const videoCaption = `Название видео: ${videoInfo.videoDetails?.title || 'Видео'}\nАвтор: ${videoInfo.videoDetails?.author?.name || 'YouTube'}`;
     const videoStream = fs.createReadStream(mergedPath);
-    await bot.telegram.sendVideo(chatId, { source: videoStream }, { caption: videoCaption });
+    await bot.telegram.sendVideo(userId, { source: videoStream }, { caption: videoCaption });
 
-    // Удаляем временные файлы
-    await Promise.all([
-      unlinkAsync(videoPath),
-      unlinkAsync(audioPath),
-      unlinkAsync(mergedPath)
-    ]);
-
-    userRequests[userId] = false;
-    isUploading = false;
-    await Request.findByIdAndUpdate(request._id, { status: 'completed' });
-    await bot.telegram.sendMessage(chatId, 'Видео загружено успешно!');
+    await bot.telegram.sendMessage(userId, 'Видео загружено успешно!');
     await Request.findByIdAndDelete(request._id);
   } catch (err) {
-    const request = await Request.findOne({ status: 'pending' }).sort({ createdAt: 'asc' });
-    console.error('Произошла ошибка:', err);
-    const { userId } = request;
-    await bot.telegram.sendMessage(userId, '[ОШИБКА] Возможные причины возникновения ошибки: видео слишком большое.');
-    await Request.findByIdAndDelete(request._id);
-    userRequests[userId] = false;
-    isUploading = false;
-    console.log(err);
-    // Удаляем временные файлы в случае ошибки
-    try {
-      const videoPath = 'video.mp4';
-      const audioPath = 'audio.mp4';
-      const mergedPath = 'merged.mp4';
-      await Promise.all([
-        unlinkAsync(videoPath),
-        unlinkAsync(audioPath),
-        unlinkAsync(mergedPath)
-      ]);
-    } catch (err) {
-      console.error('Ошибка при удалении временных файлов:', err);
+    console.error('Ошибка при обработке YouTube запроса:', err.message || err);
+
+    if (currentRequest) {
+      if (currentRequest.userId) {
+        try {
+          await bot.telegram.sendMessage(
+            currentRequest.userId,
+            '[ОШИБКА] Не удалось обработать видео. Возможные причины: видео защищено, слишком большое или недоступно.'
+          );
+        } catch (msgErr) {
+          console.error('Ошибка отправки уведомления об ошибке:', msgErr.message);
+        }
+      }
+      try {
+        await Request.findByIdAndDelete(currentRequest._id);
+      } catch (dbErr) {
+        console.error('Ошибка удаления запроса из базы данных:', dbErr.message);
+      }
     }
+  } finally {
+    if (currentRequest && currentRequest.userId) {
+      userRequests[currentRequest.userId] = false;
+    }
+    isUploading = false;
+    safeDeleteFile(videoPath);
+    safeDeleteFile(audioPath);
+    safeDeleteFile(mergedPath);
   }
 }
 
 async function downloadFile(url, filePath) {
-  const response = await axios.get(url, { responseType: 'stream' });
+  const response = await axios.get(url, { responseType: 'stream', timeout: 60000 });
   const writer = fs.createWriteStream(filePath);
   response.data.pipe(writer);
   return new Promise((resolve, reject) => {
     writer.on('finish', resolve);
     writer.on('error', reject);
+    response.data.on('error', reject);
   });
 }
 
