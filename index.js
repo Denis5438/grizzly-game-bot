@@ -4376,7 +4376,7 @@ bot.hears('/pingtest', (ctx) => ctx.reply('pong!'));
 
   
 // =============================================================
-// 1. НА ТИВНЫЙ HTTP HEALTH-СЕРВЕР И ЛЕНДИНГ GRIZLI ДЛЯ RENDER.COM
+// 1. НА ТИВНЫЙ HTTP HEALTH-СЕРВЕР И ЛЕНДИНГ GRIZZLY ДЛЯ RENDER.COM
 // =============================================================
 const http = require('http');
 const path = require('path');
@@ -4444,7 +4444,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Живая статистика для сайта GRIZLI
+  // 3. Живая статистика для сайта Grizzly
   if (req.method === 'GET' && url === '/api/stats') {
     (async () => {
       try {
@@ -4470,7 +4470,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 4. Главная страница: Официальный портал и база команд GRIZLI
+  // 4. Главная страница: Официальный портал и база команд Grizzly
   if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
     const html = getLandingHtml();
     if (html) {
