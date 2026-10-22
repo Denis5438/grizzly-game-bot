@@ -47,32 +47,41 @@ bot.use(async (ctx, next) => {
       const telegramId = ctx.from.id;
       let user = await User.findOne({ telegramId });
       
-      // Если пользователя нет - создаем
+      // Если пользователя нет - создаем (с защитой от race condition E11000)
       if (!user) {
-        user = new User({
-          telegramId: telegramId,
-          nickname: ctx.from.first_name,
-          firstName: ctx.from.first_name,
-          lastName: ctx.from.last_name,
-          username: ctx.from.username,
-          admin: 0,
-          ban: false,
-          cookies: 0,
-          bankCookies: 0,
-          lastBonusTime: new Date(),
-          registrationDate: new Date(),
-          lastTransferTime: new Date(),
-          isRegistered: false,
-          userRequestInfo: {
-            requests: 10,
-            lastRequestTime: null,
-            limit: 10,
-            referralCode: telegramId.toString(),
-            invitedUsers: [],
-            gptcoin: 5
+        try {
+          user = new User({
+            telegramId: telegramId,
+            nickname: ctx.from.first_name || `Игрок ${telegramId}`,
+            firstName: ctx.from.first_name,
+            lastName: ctx.from.last_name,
+            username: ctx.from.username,
+            admin: 0,
+            ban: false,
+            cookies: 0,
+            bankCookies: 0,
+            lastBonusTime: new Date(0),
+            registrationDate: new Date(),
+            lastTransferTime: new Date(),
+            isRegistered: false,
+            userRequestInfo: {
+              requests: 10,
+              lastRequestTime: null,
+              limit: 10,
+              referralCode: telegramId.toString(),
+              invitedUsers: [],
+              gptcoin: 5
+            }
+          });
+          await user.save();
+        } catch (createErr) {
+          // Если произошла гонка параллельных запросов и запись уже создана (E11000)
+          if (createErr.code === 11000) {
+            user = await User.findOne({ telegramId });
+          } else {
+            throw createErr;
           }
-        });
-        await user.save();
+        }
       } else {
         // Обновляем данные профиля если изменились
         let needUpdate = false;
@@ -88,7 +97,7 @@ bot.use(async (ctx, next) => {
           user.username = ctx.from.username;
           needUpdate = true;
         }
-        if (!user.userRequestInfo.referralCode) {
+        if (user.userRequestInfo && !user.userRequestInfo.referralCode) {
           user.userRequestInfo.referralCode = telegramId.toString();
           needUpdate = true;
         }
