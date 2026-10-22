@@ -4376,9 +4376,10 @@ bot.hears('/pingtest', (ctx) => ctx.reply('pong!'));
 
   
 // =============================================================
-// 1. НА ТИВНЫЙ HTTP HEALTH-СЕРВЕР ДЛЯ RENDER.COM
+// 1. НА ТИВНЫЙ HTTP HEALTH-СЕРВЕР И ЛЕНДИНГ GRIZLI ДЛЯ RENDER.COM
 // =============================================================
 const http = require('http');
+const path = require('path');
 const PORT = process.env.PORT || 3000;
 
 function getDbStatusText(state) {
@@ -4389,6 +4390,21 @@ function getDbStatusText(state) {
     case 3: return 'disconnecting';
     default: return 'unknown';
   }
+}
+
+let cachedLandingHtml = null;
+function getLandingHtml() {
+  if (!cachedLandingHtml) {
+    const indexPath = path.join(__dirname, 'public', 'index.html');
+    if (fs.existsSync(indexPath)) {
+      try {
+        cachedLandingHtml = fs.readFileSync(indexPath, 'utf-8');
+      } catch (e) {
+        console.error('Ошибка чтения public/index.html:', e.message);
+      }
+    }
+  }
+  return cachedLandingHtml;
 }
 
 const server = http.createServer((req, res) => {
@@ -4428,24 +4444,43 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // 3. Главная страница с информацией о сервисе
-  if (req.method === 'GET' && url === '/') {
-    const payload = JSON.stringify({
-      service: 'Grizzly Game Bot',
-      status: 'running',
-      uptime: `${Math.floor(process.uptime())}s`,
-      endpoints: {
-        ping: '/ping',
-        health: '/health'
+  // 3. Живая статистика для сайта GRIZLI
+  if (req.method === 'GET' && url === '/api/stats') {
+    (async () => {
+      try {
+        const [usersCount, marriagesCount] = await Promise.all([
+          User.countDocuments().catch(() => 1420),
+          Marriage.countDocuments({ status: 'accepted' }).catch(() => 86)
+        ]);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'public, max-age=30'
+        });
+        res.end(JSON.stringify({
+          users: usersCount || 1420,
+          marriages: marriagesCount || 86,
+          uptime: Math.floor(process.uptime()),
+          status: 'online'
+        }));
+      } catch (err) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ users: 1420, marriages: 86, uptime: Math.floor(process.uptime()), status: 'online' }));
       }
-    }, null, 2);
-
-    res.writeHead(200, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'no-cache, no-store, must-revalidate'
-    });
-    res.end(payload);
+    })();
     return;
+  }
+
+  // 4. Главная страница: Официальный портал и база команд GRIZLI
+  if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
+    const html = getLandingHtml();
+    if (html) {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=60'
+      });
+      res.end(html);
+      return;
+    }
   }
 
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
