@@ -2686,17 +2686,18 @@ const commands = {
 };
 
 bot.on("text", async (ctx, next) => {
-  const text = ctx.message.text.trim();
+  const text = ctx.message.text ? ctx.message.text.trim() : '';
   const command = Object.values(commands).find((cmd) => text.startsWith(cmd.name));
   if (!command) return next(); // Если команда не найдена, передаём управление дальше
 
-  const userId = ctx.from.id.toString();
+  const userId = Number(ctx.from.id);
   const user = await User.findOne({ telegramId: userId });
   if (!user) return ctx.reply("❌ Ваш профиль не найден.");
 
   // Находим брак
   const marriage = await Marriage.findOne({
-    $or: [{ userId: userId }, { partnerId: userId }]
+    $or: [{ userId: userId }, { partnerId: userId }],
+    status: 'accepted'
   });
 
   if (!marriage) {
@@ -2704,27 +2705,23 @@ bot.on("text", async (ctx, next) => {
   }
 
   // Получаем ссылки на никнеймы с кликабельными ссылками
-  const userNickname = await getNicknameByTelegramId(marriage.userId);
-  const partnerNickname = await getNicknameByTelegramId(marriage.partnerId);
+  const partnerId = getPartnerId(marriage, userId);
+  const userNickname = await getNicknameByTelegramId(userId);
+  const partnerNickname = await getNicknameByTelegramId(partnerId);
 
-  let responseMessage;
-
-  // Условие для определения, чей ник показывать
-  if (marriage.userId === userId) {
-    responseMessage = `${userNickname} ${command.response} ${partnerNickname}`;
-  } else {
-    responseMessage = `${partnerNickname} ${command.response} ${userNickname}`;
-  }
+  const responseMessage = `${userNickname} ${command.response} ${partnerNickname}`;
 
   // Если у команды есть API для изображений, добавляем картинку
   if (command.apiEndpoint) {
-    const imageUrl = await getAnimeImage(command.apiEndpoint);
-    await ctx.replyWithHTML(`${responseMessage}<a href="${imageUrl}">.</a>`);
+    try {
+      const imageUrl = await getAnimeImage(command.apiEndpoint);
+      await ctx.replyWithHTML(`${responseMessage}<a href="${imageUrl}">.</a>`);
+    } catch (e) {
+      await ctx.replyWithHTML(responseMessage);
+    }
   } else {
     await ctx.replyWithHTML(responseMessage);
   }
-
-  next(); // Передаём управление следующему обработчику
 });
 
 
@@ -2818,6 +2815,8 @@ const marriageSchema = new Mongoose.Schema({
   // Премиум-статус отношений
   isPremium: { type: Boolean, default: false },
   premiumUntil: { type: Date, default: null },
+  isPremiumRelations: { type: Boolean, default: false },
+  premiumExpiresAt: { type: Date, default: null },
   // Совместные достижения
   achievements: [{ type: String }],
   // Последняя активность
@@ -2834,37 +2833,297 @@ marriageSchema.index({ status: 1 }); // Для поиска по статусу
 
 const Marriage = Mongoose.model('Marriage', marriageSchema);
 
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function getPartnerId(marriage, userId) {
+  if (!marriage) return null;
+  return Number(marriage.userId) === Number(userId) ? Number(marriage.partnerId) : Number(marriage.userId);
+}
+
 // Функция для получения nickname по telegramId с кликабельной ссылкой
 async function getNicknameByTelegramId(telegramId) {
   const user = await User.findOne({ telegramId });
   if (user && user.nickname) {
-    return `<a href="tg://user?id=${telegramId}">${user.nickname}</a>`;
+    return `<a href="tg://user?id=${telegramId}">${escapeHtml(user.nickname)}</a>`;
   } else {
     return `<a href="tg://user?id=${telegramId}">User${telegramId}</a>`;
   }
 }
 
 // =============================================================
-// КОНСТАНТЫ И КАТАЛОГИ СИСТЕМЫ ОТНОШЕНИЙ GRIZZLY
+// КОНСТАНТЫ И КАТАЛОГИ СИСТЕМЫ ОТНОШЕНИЙ CELYA / GRIZZLY
 // =============================================================
 
-const RELATION_ACTIONS = [
-  { level: 1, name: 'комплимент', label: 'Сделать комплимент', sparks: 15, exp: 20, cd: 5 * 60 * 1000, emoji: '💬', msg: 'сделал(а) нежный комплимент' },
-  { level: 2, name: 'завтрак', label: 'Приготовить завтрак', sparks: 35, exp: 40, cd: 8 * 60 * 1000, emoji: '🥞', msg: 'приготовил(а) вкусный завтрак в постель для' },
-  { level: 3, name: 'цветы', label: 'Подарить цветы', sparks: 60, exp: 60, cd: 11 * 60 * 1000, emoji: '💐', msg: 'подарил(а) шикарный букет цветов для' },
-  { level: 4, name: 'фильм', label: 'Посмотреть фильм', sparks: 80, exp: 80, cd: 15 * 60 * 1000, emoji: '🎬', msg: 'устроил(а) уютный просмотр фильма с' },
-  { level: 5, name: 'массаж', label: 'Сделать массаж', sparks: 120, exp: 110, cd: 20 * 60 * 1000, emoji: '💆', msg: 'сделал(а) расслабляющий массаж для' },
-  { level: 6, name: 'прогулка', label: 'Пойти на прогулку', sparks: 150, exp: 140, cd: 25 * 60 * 1000, emoji: '✨', msg: 'пошёл(шла) на романтическую прогулку под звёздами с' },
-  { level: 7, name: 'романтика', label: 'Романтический ужин', sparks: 180, exp: 170, cd: 30 * 60 * 1000, emoji: '🕯️', msg: 'устроил(а) ужин при свечах для' },
-  { level: 8, name: 'постель', label: 'Уединиться в постели', sparks: 250, exp: 220, cd: 35 * 60 * 1000, emoji: '🔥', msg: 'страстно уединился(лась) в постели с', canConceive: true },
-  { level: 9, name: 'пикник', label: 'Пикник на природе', sparks: 280, exp: 260, cd: 40 * 60 * 1000, emoji: '🧺', msg: 'организовал(а) пикник на поляне с' },
-  { level: 10, name: 'путешествие', label: 'Отправиться в путешествие', sparks: 350, exp: 320, cd: 50 * 60 * 1000, emoji: '✈️', msg: 'отправился(лась) в захватывающее путешествие с' },
-  { level: 12, name: 'танец', label: 'Медленный танец', sparks: 400, exp: 370, cd: 60 * 60 * 1000, emoji: '💃', msg: 'закружил(а) в медленном танце' },
-  { level: 15, name: 'сюрприз', label: 'Сделать сюрприз', sparks: 500, exp: 450, cd: 75 * 60 * 1000, emoji: '🎉', msg: 'подготовил(а) незабываемый сюрприз для' },
-  { level: 20, name: 'клятва', label: 'Клятва верности', sparks: 750, exp: 600, cd: 90 * 60 * 1000, emoji: '💍', msg: 'поклялся(лась) в вечной любви перед' },
-  { level: 25, name: 'круиз', label: 'Морской круиз', sparks: 1000, exp: 800, cd: 120 * 60 * 1000, emoji: '🚢', msg: 'отправился(лась) в кругосветный круиз с' },
-  { level: 30, name: 'вечность', label: 'Сплетение душ', sparks: 2000, exp: 1500, cd: 180 * 60 * 1000, emoji: '💖', msg: 'соединил(а) свою судьбу навечно с' }
+const RELATION_LEVEL_THRESHOLDS = [
+  { level: 1, sparks: 0, title: 'Зарождение интереса' },
+  { level: 2, sparks: 1000, title: 'Первые искры' },
+  { level: 3, sparks: 2000, title: 'Взаимное притяжение' },
+  { level: 4, sparks: 3000, title: 'Глубокое узнавание' },
+  { level: 5, sparks: 6000, title: 'Первая близость' },
+  { level: 6, sparks: 10000, title: 'Романтическое увлечение' },
+  { level: 7, sparks: 22000, title: 'Прочная связь' },
+  { level: 8, sparks: 34000, title: 'Гармония и понимание' },
+  { level: 9, sparks: 40000, title: 'Совместное будущее' },
+  { level: 10, sparks: 55000, title: 'Безусловная любовь' },
+  { level: 11, sparks: 70000, title: 'Слияние сердец' },
+  { level: 12, sparks: 100000, title: 'Духовная связь' },
+  { level: 13, sparks: 150000, title: 'Полное доверие' },
+  { level: 14, sparks: 230000, title: 'Неразрывная близость' },
+  { level: 15, sparks: 340000, title: 'Гармоничная связь' },
+  { level: 16, sparks: 560000, title: 'Абсолютное единство' },
+  { level: 17, sparks: 790000, title: 'Вечная преданность' },
+  { level: 18, sparks: 1100000, title: 'Бесконечная любовь' },
+  { level: 19, sparks: 3000000, title: 'Неразделимое целое' },
+  { level: 20, sparks: 5000000, title: 'Идеальная гармония' },
+  { level: 21, sparks: 9000000, title: 'Космическое единение' },
+  { level: 22, sparks: 15000000, title: 'Родственные души' },
+  { level: 23, sparks: 22000000, title: 'Мистическая связь' },
+  { level: 24, sparks: 35000000, title: 'Вселенская гармония' },
+  { level: 25, sparks: 47000000, title: 'Нерушимый союз' },
+  { level: 26, sparks: 70000000, title: 'Божественное слияние' },
+  { level: 27, sparks: 90000000, title: 'Трансцендентная близость' },
+  { level: 28, sparks: 120000000, title: 'Вечное пламя' },
+  { level: 29, sparks: 350000000, title: 'Безграничное единство' },
+  { level: 30, sparks: 1500000000, title: 'Легендарная любовь' }
 ];
+
+function getCoupleLevel(marriage) {
+  if (!marriage) return 1;
+  const sparks = marriage.sparks || 0;
+  let lvlFromSparks = 1;
+  for (let i = RELATION_LEVEL_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (sparks >= RELATION_LEVEL_THRESHOLDS[i].sparks) {
+      lvlFromSparks = RELATION_LEVEL_THRESHOLDS[i].level;
+      break;
+    }
+  }
+  return Math.min(30, Math.max(marriage.level || 1, lvlFromSparks));
+}
+
+function formatActionCooldown(ms) {
+  const totalMin = Math.round(ms / 60000);
+  if (totalMin < 60) {
+    return `${totalMin}м`;
+  }
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return m > 0 ? `${h}ч. ${m}м` : `${h}ч`;
+}
+
+const RELATION_ACTIONS = [
+  { level: 1, id: 'комплимент', label: 'Сделать комплимент', aliases: ['сделать комплимент', 'комплимент'], sparks: 15, exp: 20, cd: 5 * 60 * 1000, emoji: '💬', msg: 'сделал(а) нежный комплимент' },
+  { level: 2, id: 'завтрак', label: 'Сделать завтрак', aliases: ['сделать завтрак', 'приготовить завтрак', 'завтрак'], sparks: 35, exp: 40, cd: 8 * 60 * 1000, emoji: '🥞', msg: 'приготовил(а) вкусный завтрак в постель для' },
+  { level: 3, id: 'цветы', label: 'Подарить цветы', aliases: ['подарить цветы', 'цветы'], sparks: 60, exp: 60, cd: 11 * 60 * 1000, emoji: '💐', msg: 'подарил(а) шикарный букет цветов для' },
+  { level: 4, id: 'фильм', label: 'Посмотреть фильм', aliases: ['посмотреть фильм', 'посмотреть кино', 'фильм', 'кино'], sparks: 80, exp: 80, cd: 15 * 60 * 1000, emoji: '🎬', msg: 'устроил(а) уютный просмотр фильма с' },
+  { level: 5, id: 'массаж', label: 'Сделать массаж', aliases: ['сделать массаж', 'массаж'], sparks: 120, exp: 110, cd: 20 * 60 * 1000, emoji: '💆', msg: 'сделал(а) расслабляющий массаж для' },
+  { level: 6, id: 'романтика', label: 'Романтический ужин', aliases: ['романтический ужин', 'устроить романтический ужин', 'устроить ужин', 'ужин', 'романтика'], sparks: 170, exp: 150, cd: 30 * 60 * 1000, emoji: '🕯️', msg: 'устроил(а) незабываемый романтический ужин при свечах для' },
+  { level: 7, id: 'подарок', label: 'Сделать подарок', aliases: ['сделать подарок', 'подарок'], sparks: 230, exp: 200, cd: 38 * 60 * 1000, emoji: '🎁', msg: 'преподнёс(преподнесла) неожиданный трогательный подарок для' },
+  { level: 8, id: 'поездка', label: 'Туристическая поездка', aliases: ['туристическая поездка', 'поездка', 'поехать в поездку'], sparks: 300, exp: 250, cd: 45 * 60 * 1000, emoji: '✈️', msg: 'отправился(лась) в захватывающую туристическую поездку с' },
+  { level: 9, id: 'астрономия', label: 'Вечер астрономии', aliases: ['вечер астрономии', 'астрономия'], sparks: 400, exp: 320, cd: 60 * 60 * 1000, emoji: '🔭', msg: 'провёл(провела) волшебный вечер астрономии под звёздами с' },
+  { level: 10, id: 'воспоминания', label: 'Приятные воспоминания', aliases: ['приятные воспоминания', 'воспоминания'], sparks: 500, exp: 400, cd: 80 * 60 * 1000, emoji: '💭', msg: 'погрузился(лась) в тёплые приятные воспоминания вместе с' },
+  { level: 11, id: 'фотосессия', label: 'Совместная фотосессия', aliases: ['совместная фотосессия', 'сделать фотосессию', 'фотосессия'], sparks: 700, exp: 500, cd: 90 * 60 * 1000, emoji: '📸', msg: 'провёл(провела) памятную совместную фотосессию с' },
+  { level: 12, id: 'традиция', label: 'Создать традицию', aliases: ['создать традицию', 'традиция'], sparks: 900, exp: 600, cd: 100 * 60 * 1000, emoji: '🕯️', msg: 'создал(а) новую прекрасную семейную традицию вместе с' },
+  { level: 13, id: 'проект', label: 'Совместный проект', aliases: ['совместный проект', 'проект'], sparks: 1100, exp: 700, cd: 110 * 60 * 1000, emoji: '🎨', msg: 'запустил(а) совместный творческий проект с' },
+  { level: 14, id: 'родословная', label: 'Исследовать родословную', aliases: ['исследовать родословную', 'родословная'], sparks: 1400, exp: 850, cd: 120 * 60 * 1000, emoji: '📜', msg: 'исследовал(а) семейную родословную вместе с' },
+  { level: 15, id: 'будущее', label: 'Спланировать будущее', aliases: ['спланировать будущее', 'планировать будущее', 'будущее'], sparks: 1700, exp: 1000, cd: 130 * 60 * 1000, emoji: '🗺️', msg: 'вдохновенно спланировал(а) счастливое общее будущее с' },
+  { level: 16, id: 'желание', label: 'Исполнить желание', aliases: ['исполнить желание', 'желание'], sparks: 2100, exp: 1200, cd: 140 * 60 * 1000, emoji: '🌠', msg: 'исполнил(а) заветное сокровенное желание' },
+  { level: 17, id: 'годовщина_акт', label: 'Годовщина отношений', aliases: ['годовщина отношений'], sparks: 2500, exp: 1400, cd: 150 * 60 * 1000, emoji: '🎉', msg: 'пылко отпраздновал(а) очередную годовщину отношений с' },
+  { level: 18, id: 'жилище', label: 'Обустроить жилище', aliases: ['обустроить жилище', 'обустроить дом', 'жилище'], sparks: 3000, exp: 1650, cd: 160 * 60 * 1000, emoji: '🏡', msg: 'с любовью обустроил(а) уютное семейное жилище для' },
+  { level: 19, id: 'единение', label: 'Духовное единение', aliases: ['духовное единение', 'единение'], sparks: 3500, exp: 1900, cd: 170 * 60 * 1000, emoji: '🕊️', msg: 'достиг(ла) глубокого духовного единения с' },
+  { level: 20, id: 'отдых', label: 'Уединенный отдых', aliases: ['уединенный отдых', 'отдых'], sparks: 4000, exp: 2200, cd: 180 * 60 * 1000, emoji: '🏝️', msg: 'устроил(а) уединенный романтический отдых от всего мира с' },
+  { level: 21, id: 'клятва', label: 'Написать клятву', aliases: ['написать клятву', 'клятва', 'дать клятву'], sparks: 4800, exp: 2500, cd: 200 * 60 * 1000, emoji: '💍', msg: 'написал(а) искреннюю клятву вечной верности для' },
+  { level: 22, id: 'талисман', label: 'Создать талисман', aliases: ['создать талисман', 'талисман'], sparks: 5600, exp: 2900, cd: 220 * 60 * 1000, emoji: '🧿', msg: 'создал(а) магический талисман вечной любви для' },
+  { level: 23, id: 'песня', label: 'Написать песню', aliases: ['написать песню', 'песня', 'спеть песню'], sparks: 6500, exp: 3300, cd: 240 * 60 * 1000, emoji: '🎵', msg: 'написал(а) трогательную песню о любви для' },
+  { level: 24, id: 'сад', label: 'Вырастить сад', aliases: ['вырастить сад', 'сад'], sparks: 7500, exp: 3800, cd: 260 * 60 * 1000, emoji: '🌸', msg: 'посадил(а) и вырастил(а) цветущий сад любви вместе с' },
+  { level: 25, id: 'танцевальный_вечер', label: 'Танцевальный вечер', aliases: ['танцевальный вечер', 'вечер танцев', 'танец'], sparks: 8500, exp: 4300, cd: 280 * 60 * 1000, emoji: '💃', msg: 'закружил(а) в упоительном танцевальном вечере' },
+  { level: 26, id: 'совет', label: 'Семейный совет', aliases: ['семейный совет', 'совет'], sparks: 10000, exp: 5000, cd: 300 * 60 * 1000, emoji: '👑', msg: 'собрал(а) мудрый и тёплый семейный совет с' },
+  { level: 27, id: 'звезда', label: 'Назвать звезду', aliases: ['назвать звезду', 'звезда'], sparks: 11500, exp: 5800, cd: 320 * 60 * 1000, emoji: '⭐', msg: 'назвал(а) сияющую звезду на небе в честь' },
+  { level: 28, id: 'книга', label: 'Написать книгу', aliases: ['написать книгу', 'книга'], sparks: 13000, exp: 6600, cd: 340 * 60 * 1000, emoji: '📖', msg: 'написал(а) романтическую книгу о великой любви к' },
+  { level: 29, id: 'праздник', label: 'Организовать праздник', aliases: ['организовать праздник', 'праздник'], sparks: 15000, exp: 7500, cd: 360 * 60 * 1000, emoji: '🎆', msg: 'организовал(а) грандиозный праздник в честь' },
+  { level: 30, id: 'вечная_любовь', label: 'Вечная любовь', aliases: ['вечная любовь', 'любовь', 'вечность'], sparks: 18000, exp: 9000, cd: 400 * 60 * 1000, emoji: '💖', msg: 'скрепил(а) узы вечной и нерушимой любви с' }
+];
+
+const PREMIUM_RELATION_ACTIONS = [
+  { level: 1, id: 'аура_эмпатии', isPremium: true, label: 'Аура эмпатии', aliases: ['аура эмпатии', 'аура'], sparks: 50, exp: 80, cd: 5 * 60 * 1000, emoji: '🔮', msg: 'создал(а) глубокую ментальную связь и окутал(а) Аурой эмпатии' },
+  { level: 2, id: 'нейронная_связь', isPremium: true, label: 'Нейронная связь', aliases: ['нейронная связь', 'нейросеть'], sparks: 100, exp: 150, cd: 8 * 60 * 1000, emoji: '🧠', msg: 'установил(а) нейронную связь, позволяющую испытывать эмоции друг друга, с' },
+  { level: 3, id: 'параллельный_мир', isPremium: true, label: 'Параллельный мир', aliases: ['параллельный мир', 'мир'], sparks: 200, exp: 250, cd: 11 * 60 * 1000, emoji: '🌌', msg: 'перенёс(перенесла) в персональное измерение любви в Параллельном мире' },
+  { level: 4, id: 'днк_любовь', isPremium: true, label: 'Днк любовь', aliases: ['днк любовь', 'днк'], sparks: 300, exp: 350, cd: 15 * 60 * 1000, emoji: '🧬', msg: 'закодировал(а) формулу бесконечной любви в ДНК вместе с' },
+  { level: 5, id: 'квантовое_слияние', isPremium: true, label: 'Квантовое слияние', aliases: ['квантовое слияние', 'квант'], sparks: 400, exp: 450, cd: 20 * 60 * 1000, emoji: '⚛️', msg: 'осуществил(а) квантовое слияние душ с' },
+  { level: 6, id: 'голограмма_чувств', isPremium: true, label: 'Голограмма чувств', aliases: ['голограмма чувств', 'голограмма'], sparks: 500, exp: 550, cd: 30 * 60 * 1000, emoji: '📽️', msg: 'спроецировал(а) сияющую голограмму искренних чувств для' },
+  { level: 7, id: 'антигравитационный_танец', isPremium: true, label: 'Антигравитационный танец', aliases: ['антигравитационный танец', 'антигравитация'], sparks: 600, exp: 650, cd: 38 * 60 * 1000, emoji: '🪐', msg: 'закружил(а) в невесомости в антигравитационном танце' },
+  { level: 8, id: 'хроносинхронизация', isPremium: true, label: 'Хроносинхронизация', aliases: ['хроносинхронизация', 'хроно'], sparks: 825, exp: 800, cd: 45 * 60 * 1000, emoji: '⏳', msg: 'синхронизировал(а) течение времени сердец в Хроносинхронизации с' },
+  { level: 9, id: 'космическая_медитация', isPremium: true, label: 'Космическая медитация', aliases: ['космическая медитация', 'медитация'], sparks: 1050, exp: 1000, cd: 60 * 60 * 1000, emoji: '🧘', msg: 'погрузился(лась) в космическую медитацию гармонии вместе с' },
+  { level: 10, id: 'мультивселенская_симуляция', isPremium: true, label: 'Мультивселенская симуляция', aliases: ['мультивселенская симуляция', 'симуляция'], sparks: 1600, exp: 1300, cd: 80 * 60 * 1000, emoji: '🌀', msg: 'создал(а) мультивселенскую симуляцию счастья для' },
+  { level: 11, id: 'телепатическое_послание', isPremium: true, label: 'Телепатическое послание', aliases: ['телепатическое послание', 'телепатия'], sparks: 2500, exp: 1800, cd: 90 * 60 * 1000, emoji: '📡', msg: 'передал(а) нежнейшее телепатическое послание прямо в сердце' },
+  { level: 12, id: 'энергетический_резонанс', isPremium: true, label: 'Энергетический резонанс', aliases: ['энергетический резонанс', 'резонанс'], sparks: 2800, exp: 2000, cd: 100 * 60 * 1000, emoji: '⚡', msg: 'вошёл(вошла) в мощнейший энергетический резонанс любви с' },
+  { level: 13, id: 'биолюминесцентное_слияние', isPremium: true, label: 'Биолюминесцентное слияние', aliases: ['биолюминесцентное слияние', 'биолюминесценция'], sparks: 3300, exp: 2300, cd: 110 * 60 * 1000, emoji: '✨', msg: 'озарил(а) пространство биолюминесцентным сиянием любви с' },
+  { level: 14, id: 'психосоматический_симбиоз', isPremium: true, label: 'Психосоматический симбиоз', aliases: ['психосоматический симбиоз', 'симбиоз'], sparks: 3800, exp: 2600, cd: 120 * 60 * 1000, emoji: '🧬', msg: 'достиг(ла) абсолютного психосоматического симбиоза с' },
+  { level: 15, id: 'метаморфоза_среды', isPremium: true, label: 'Метаморфоза среды', aliases: ['метаморфоза среды', 'метаморфоза'], sparks: 4200, exp: 2900, cd: 130 * 60 * 1000, emoji: '🌐', msg: 'преобразил(а) саму ткань реальности в Метаморфозе среды вокруг' },
+  { level: 16, id: 'трансцендентальное_переживание', isPremium: true, label: 'Трансцендентальное переживание', aliases: ['трансцендентальное переживание', 'трансцендентность'], sparks: 4600, exp: 3200, cd: 140 * 60 * 1000, emoji: '🔮', msg: 'испытал(а) высшее трансцендентальное переживание единения с' },
+  { level: 17, id: 'астральное_путешествие', isPremium: true, label: 'Астральное путешествие', aliases: ['астральное путешествие', 'астрал'], sparks: 5100, exp: 3500, cd: 150 * 60 * 1000, emoji: '🌌', msg: 'отправился(лась) в захватывающее астральное путешествие рука об руку с' },
+  { level: 18, id: 'нексус_сознаний', isPremium: true, label: 'Нексус сознаний', aliases: ['нексус сознаний', 'нексус'], sparks: 5700, exp: 3900, cd: 160 * 60 * 1000, emoji: '💠', msg: 'объединил(а) разумы в неделимый Нексус сознаний с' },
+  { level: 19, id: 'сингулярность_чувств', isPremium: true, label: 'Сингулярность чувств', aliases: ['сингулярность чувств', 'сингулярность'], sparks: 6100, exp: 4200, cd: 170 * 60 * 1000, emoji: '💫', msg: 'сконцентрировал(а) всю мощь чувств в Сингулярности любви с' },
+  { level: 20, id: 'квантовая_запутанность', isPremium: true, label: 'Вечная квантовая запутанность', aliases: ['вечная квантовая запутанность', 'квантовая запутанность'], sparks: 6809, exp: 4600, cd: 180 * 60 * 1000, emoji: '🔗', msg: 'навечно связал(а) квантовой запутанностью судьбу с' },
+  { level: 21, id: 'сверхновая_связь', isPremium: true, label: 'Сверхновая связь', aliases: ['сверхновая связь', 'сверхновая'], sparks: 8171, exp: 5300, cd: 200 * 60 * 1000, emoji: '💥', msg: 'зажёг(зажгла) ослепительную Сверхновую связь любви с' },
+  { level: 22, id: 'темпоральное_святилище', isPremium: true, label: 'Темпоральное святилище', aliases: ['темпоральное святилище', 'святилище'], sparks: 9806, exp: 6200, cd: 220 * 60 * 1000, emoji: '🏛️', msg: 'возвёл(возвела) несокрушимое Темпоральное святилище для' },
+  { level: 23, id: 'резонансная_камера', isPremium: true, label: 'Межпространственная резонансная камера', aliases: ['межпространственная резонансная камера', 'резонансная камера'], sparks: 11767, exp: 7200, cd: 240 * 60 * 1000, emoji: '🛸', msg: 'активировал(а) Межпространственную резонансную камеру чувств с' },
+  { level: 24, id: 'алхимия_душ', isPremium: true, label: 'Алхимия душ', aliases: ['алхимия душ', 'алхимия'], sparks: 14120, exp: 8400, cd: 260 * 60 * 1000, emoji: '🧪', msg: 'совершил(а) великое таинство Алхимии душ с' },
+  { level: 25, id: 'абсолютная_гармония', isPremium: true, label: 'Абсолютная гармония', aliases: ['абсолютная гармония', 'гармония'], sparks: 16944, exp: 9800, cd: 280 * 60 * 1000, emoji: '☯️', msg: 'достиг(ла) вершины Абсолютной гармонии Вселенной с' },
+  { level: 26, id: 'итерация_любви', isPremium: true, label: 'Бесконечная итерация любви', aliases: ['бесконечная итерация любви', 'итерация любви'], sparks: 20332, exp: 11500, cd: 300 * 60 * 1000, emoji: '♾️', msg: 'запустил(а) Бесконечную итерацию любви сквозь эпохи с' },
+  { level: 27, id: 'квинтэссенция_бытия', isPremium: true, label: 'Квинтэссенция бытия', aliases: ['квинтэссенция бытия', 'квинтэссенция'], sparks: 24398, exp: 13500, cd: 320 * 60 * 1000, emoji: '🌟', msg: 'раскрыл(а) сокровенную Квинтэссенцию бытия вместе с' },
+  { level: 28, id: 'панкосмическое_сознание', isPremium: true, label: 'Панкосмическое сознание', aliases: ['панкосмическое сознание'], sparks: 29278, exp: 15800, cd: 340 * 60 * 1000, emoji: '🪐', msg: 'расширил(а) любовь до Панкосмического сознания Вселенной с' },
+  { level: 29, id: 'омега_точка', isPremium: true, label: 'Омега-точка слияния', aliases: ['омега-точка слияния', 'омега точка', 'омега'], sparks: 35134, exp: 18500, cd: 360 * 60 * 1000, emoji: '🔱', msg: 'достиг(ла) финальной Омега-точки слияния миров с' },
+  { level: 30, id: 'божественная_унификация', isPremium: true, label: 'Божественная унификация', aliases: ['божественная унификация', 'унификация'], sparks: 42161, exp: 22000, cd: 400 * 60 * 1000, emoji: '👑', msg: 'слился(лась) воедино в высшей Божественной унификации с' }
+];
+
+const BED_ACTION = {
+  level: 1,
+  id: 'постель',
+  label: 'Уединиться в постели',
+  aliases: ['постель', 'кекс', 'секс', 'пошалить', 'уединиться в постели', 'уединиться'],
+  sparks: 250,
+  exp: 220,
+  cd: 35 * 60 * 1000,
+  emoji: '🔥',
+  msg: 'страстно уединился(лась) в постели с',
+  canConceive: true
+};
+
+const ALL_RELATION_ACTIONS = [...RELATION_ACTIONS, ...PREMIUM_RELATION_ACTIONS, BED_ACTION];
+
+function isCouplePremium(marriage) {
+  if (!marriage) return false;
+  const now = new Date();
+  if (marriage.isPremiumRelations && (!marriage.premiumExpiresAt || new Date(marriage.premiumExpiresAt) > now)) {
+    return true;
+  }
+  if (marriage.isPremium && (!marriage.premiumUntil || new Date(marriage.premiumUntil) > now)) {
+    return true;
+  }
+  return false;
+}
+
+function getActionCooldown(marriage, userId, actionId) {
+  if (!marriage || !marriage.actionCooldowns) return null;
+  const key = `${userId}_${actionId}`;
+  let val = null;
+  if (typeof marriage.actionCooldowns.get === 'function') {
+    val = marriage.actionCooldowns.get(key);
+  } else {
+    val = marriage.actionCooldowns[key];
+  }
+  return val ? new Date(val) : null;
+}
+
+function setActionCooldown(marriage, userId, actionId, durationMs) {
+  if (!marriage.actionCooldowns) marriage.actionCooldowns = new Map();
+  const key = `${userId}_${actionId}`;
+  const expiry = new Date(Date.now() + durationMs);
+  if (typeof marriage.actionCooldowns.set === 'function') {
+    marriage.actionCooldowns.set(key, expiry);
+  } else {
+    marriage.actionCooldowns[key] = expiry;
+  }
+}
+
+function findRelationAction(input) {
+  if (!input || typeof input !== 'string') return null;
+  const raw = input.toLowerCase().replace(/^[.!\/]?отн\s+/i, '').trim();
+  if (!raw) return null;
+
+  // 1. Прямое совпадение по id, label или aliases
+  for (const act of ALL_RELATION_ACTIONS) {
+    if (act.id === raw || act.label.toLowerCase() === raw) return act;
+    if (act.aliases && act.aliases.some(a => a.toLowerCase() === raw)) return act;
+  }
+
+  // 2. Без служебных префиксов («сделать», «подарить», «устроить» и т.д.)
+  const stripped = raw.replace(/^(сделать|подарить|устроить|приготовить|организовать|поехать в|отправиться в|провести|создать|написать|вырастить|пойти на|посмотреть)\s+/i, '').trim();
+  if (stripped && stripped !== raw) {
+    for (const act of ALL_RELATION_ACTIONS) {
+      if (act.id === stripped || act.label.toLowerCase() === stripped) return act;
+      if (act.aliases && act.aliases.some(a => a.toLowerCase() === stripped)) return act;
+    }
+  }
+
+  // 3. Совпадение по началу фразы (например: «сделать завтрак любимой», «подарить цветы половинке»)
+  for (const act of ALL_RELATION_ACTIONS) {
+    if (raw.startsWith(act.label.toLowerCase())) return act;
+    if (act.aliases && act.aliases.some(a => raw.startsWith(a.toLowerCase()))) return act;
+    if (stripped && stripped !== raw) {
+      if (stripped.startsWith(act.label.toLowerCase())) return act;
+      if (act.aliases && act.aliases.some(a => stripped.startsWith(a.toLowerCase()))) return act;
+    }
+  }
+
+  return null;
+}
+
+async function formatRelationActionsMessage(marriage, expanded = false, callerId = null) {
+  const caller = callerId ? Number(callerId) : Number(marriage.userId);
+  const partner = getPartnerId(marriage, caller);
+  const callerNick = await getNicknameByTelegramId(caller);
+  const partnerNick = await getNicknameByTelegramId(partner);
+
+  const coupleLevel = getCoupleLevel(marriage);
+
+  let msg = `${partnerNick}\n${callerNick},\n🔄 <b>Обычные действия</b>\n<blockquote>`;
+
+  const regularList = expanded ? RELATION_ACTIONS : RELATION_ACTIONS.slice(0, 3);
+  const totalRegular = RELATION_ACTIONS.length;
+
+  regularList.forEach((act, idx) => {
+    const isUnlocked = coupleLevel >= act.level;
+    const badge = isUnlocked ? '✅' : '🔒';
+    const cdText = formatActionCooldown(act.cd);
+    const hasMore = !expanded && idx === regularList.length - 1 && totalRegular > regularList.length;
+    msg += `[${act.level}] ${badge} • «${act.label}» | 🔥 +${act.sparks}|${cdText}${hasMore ? ' ⌵' : ''}\n`;
+  });
+  msg += `</blockquote>\n`;
+
+  msg += `<i>💎 Доступно только с премиум-статусом</i>\n<blockquote>`;
+
+  const premList = expanded ? PREMIUM_RELATION_ACTIONS : PREMIUM_RELATION_ACTIONS.slice(0, 3);
+  const totalPrem = PREMIUM_RELATION_ACTIONS.length;
+
+  premList.forEach((act, idx) => {
+    const hasMore = !expanded && idx === premList.length - 1 && totalPrem > premList.length;
+    if (expanded) {
+      const cdText = formatActionCooldown(act.cd);
+      msg += `[${act.level}] 💎 • «${act.label}» | 🔥 +${act.sparks}|${cdText}\n`;
+    } else {
+      msg += `[${act.level}] 💎 • ${act.label}${hasMore ? ' ⌵' : ''}\n`;
+    }
+  });
+  msg += `</blockquote>\n`;
+
+  msg += `🔥 • Пример действия: <b>.отн сделать завтрак</b>\n\n`;
+
+  if (isCouplePremium(marriage)) {
+    msg += `💎 • <b>Премиум-отношения активны!</b> (Кулдауны -35%, искры +20%)`;
+  } else {
+    msg += `💎 • Получите премиум-отношения для доступа к уникальным действиям!`;
+  }
+
+  return msg;
+}
+
+function getRelationActionsKeyboard(expanded = false) {
+  const toggleBtn = expanded
+    ? Markup.button.callback('Свернуть ⌃', 'rel_actions_collapse')
+    : Markup.button.callback('Развернуть ⌵', 'rel_actions_expand');
+
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('💎 Купить премиум отношения', 'rel_buy_premium')],
+    [toggleBtn]
+  ]);
+}
 
 const RELATION_HOUSES = [
   { level: 1, name: 'Шалаш в лесу', comfort: 10, upgradeCost: 300, icon: '⛺' },
@@ -2981,7 +3240,8 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
 
     // Проверка на наличие активного запроса на отношения
     if (pendingRequests.has(targetId)) {
-      const existingRequesterId = pendingRequests.get(targetId);
+      const existingReq = pendingRequests.get(targetId);
+      const existingRequesterId = typeof existingReq === 'object' ? existingReq.senderId : existingReq;
       const existingRequesterNickname = await getNicknameByTelegramId(existingRequesterId);
       return ctx.reply(`❌ У ${existingRequesterNickname} уже есть активный запрос к этому пользователю.`);
     }
@@ -3022,9 +3282,6 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
     });
     await marriageRequest.save();
 
-    // Добавление запроса в список ожидающих
-    pendingRequests.set(targetId, senderId);
-
     // ⚡ ОПТИМИЗАЦИЯ: Параллельная загрузка пользователей для никнеймов
     const [senderUser, targetUser] = await Promise.all([
       User.findOne({ telegramId: senderId }),
@@ -3046,14 +3303,17 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
     );
 
     // Таймер для аннулирования запроса после 2 минут
-    setTimeout(async () => {
-      if (pendingRequests.has(targetId)) {
+    const reqTimer = setTimeout(async () => {
+      const current = pendingRequests.get(targetId);
+      const curReqId = typeof current === 'object' ? current.requestId?.toString() : null;
+      if (curReqId === marriageRequest._id.toString() || current === senderId) {
         pendingRequests.delete(targetId);
-        // Удаляем запрос из базы данных
-        await Marriage.deleteOne({ _id: marriageRequest._id });
-        ctx.telegram.editMessageText(ctx.chat.id, message.message_id, null, '⏳ Время вышло! Запрос аннулирован.');
+        await Marriage.deleteOne({ _id: marriageRequest._id }).catch(() => {});
+        ctx.telegram.editMessageText(ctx.chat.id, message.message_id, null, '⏳ Время вышло! Запрос аннулирован.').catch(() => {});
       }
     }, 120000); // 2 минуты
+
+    pendingRequests.set(targetId, { senderId, requestId: marriageRequest._id, timer: reqTimer });
 
   } catch (error) {
     console.error('Ошибка в команде запроса на отношения:', error);
@@ -3091,7 +3351,9 @@ bot.action(/^accept_(\d+)_(\d+)$/, async (ctx) => {
       return ctx.editMessageText('⏳ Запрос уже недействителен.');
     }
 
-    // Удаляем из pending requests
+    // Удаляем из pending requests и очищаем таймер
+    const existingReq = pendingRequests.get(targetId);
+    if (existingReq && existingReq.timer) clearTimeout(existingReq.timer);
     pendingRequests.delete(targetId);
 
     // Обновляем статус брака
@@ -3119,7 +3381,7 @@ bot.action(/^accept_(\d+)_(\d+)$/, async (ctx) => {
 
     // Уведомляем о принятии запроса
     ctx.editMessageText(
-      `💖 ${targetNickname} принял(а) предложение ${senderNickname}!\n\n🎉 Поздравляем с началом отношений!\n\n💡 Теперь вы можете:\n• Дарить подарки: .отн подарок &lt;сумма&gt;\n• Смотреть статистику: .отн статистика\n• Получать бонусы за совместную активность!`, 
+      `💖 ${targetNickname} принял(а) предложение ${senderNickname}!\n\n🎉 Поздравляем с началом отношений!\n\n💡 Теперь вы можете:\n• Дарить подарки: .отн подарок <сумма>\n• Смотреть статистику: .отн статистика\n• Получать бонусы за совместную активность!`, 
       { parse_mode: 'HTML' }
     );
 
@@ -3171,6 +3433,8 @@ bot.action(/^decline_(\d+)_(\d+)$/, async (ctx) => {
       await marriageRequest.save();
     }
 
+    const existingReq = pendingRequests.get(targetId);
+    if (existingReq && existingReq.timer) clearTimeout(existingReq.timer);
     pendingRequests.delete(targetId);
     
     const targetNickname = await getNicknameByTelegramId(targetId);
@@ -3183,7 +3447,7 @@ bot.action(/^decline_(\d+)_(\d+)$/, async (ctx) => {
       senderId, 
       `💔 Ваше предложение было отклонено ${targetNickname}.`, 
       { parse_mode: 'HTML' }
-    );
+    ).catch(() => {});
     
   } catch (error) {
     console.error('Ошибка при отклонении запроса:', error);
@@ -3201,7 +3465,9 @@ bot.hears(/^\.отн (да|нет)$/i, async (ctx) => {
       return ctx.reply('❌ У вас нет активных запросов на отношения.');
     }
 
-    const senderId = pendingRequests.get(targetId);
+    const reqData = pendingRequests.get(targetId);
+    const senderId = typeof reqData === 'object' ? reqData.senderId : reqData;
+    if (reqData && reqData.timer) clearTimeout(reqData.timer);
     pendingRequests.delete(targetId);
 
     const marriageRequest = await Marriage.findOne({
@@ -3266,7 +3532,7 @@ bot.hears(/^\.отн развод/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
 
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
 
     // Обновляем статус брака на "разведен"
     marriage.status = 'divorced';
@@ -3330,7 +3596,7 @@ bot.hears(/^\.отн (я|статус|профиль)$/i, async (ctx) => {
     }
     await marriage.save();
 
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const [userDoc, partnerDoc] = await Promise.all([
       User.findOne({ telegramId: userId }),
       User.findOne({ telegramId: partnerId })
@@ -3391,146 +3657,423 @@ ${babyNotice}
   }
 });
 
-// === ✨ Список действий отношений (.отн действия) ===
-bot.hears(/^\.отн действия$/i, async (ctx) => {
-  try {
-    const userId = ctx.from.id;
-    const marriage = await Marriage.findOne({
-      $or: [{ userId }, { partnerId: userId }],
-      status: 'accepted'
+// === 🎭 Выполнение действия отношений (функция) ===
+async function executeRelationAction(ctx, act) {
+  const userId = Number(ctx.from.id);
+  const marriage = await Marriage.findOne({
+    $or: [{ userId }, { partnerId: userId }],
+    status: 'accepted'
+  });
+  if (!marriage) {
+    return ctx.reply('❌ Вы не состоите в отношениях.\n💡 Чтобы предложить отношения: <code>.отн запрос @username</code>', { parse_mode: 'HTML' });
+  }
+
+  // 1. Проверка премиум-действия
+  const isPrem = isCouplePremium(marriage);
+  if (act.isPremium && !isPrem) {
+    return ctx.reply(
+      `💎 Действие «<b>${act.label}</b>» доступно только для пар с премиум-статусом отношений!\n\n` +
+      `💡 <i>Получите премиум-отношения для доступа к уникальным действиям:</i> <code>.отн премиум</code>`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('💎 Купить премиум отношения', 'rel_buy_premium')]
+        ])
+      }
+    );
+  }
+
+  // 2. Проверка уровня пары
+  const coupleLevel = getCoupleLevel(marriage);
+  if (coupleLevel < act.level) {
+    return ctx.reply(`🔒 Действие «<b>${act.label}</b>» откроется на <b>${act.level}</b> уровне отношений! (Ваш текущий уровень: <b>${coupleLevel}</b>)`, { parse_mode: 'HTML' });
+  }
+
+  // 3. Проверка индивидуального кулдауна на это действие
+  const cdDate = getActionCooldown(marriage, userId, act.id);
+  if (cdDate && new Date() < cdDate) {
+    const callerNick = await getNicknameByTelegramId(userId);
+    const leftSec = Math.ceil((cdDate.getTime() - Date.now()) / 1000);
+    const m = Math.floor(leftSec / 60);
+    const s = leftSec % 60;
+    const timeStr = m > 0 ? `${m}м. ${s}с` : `${s}с`;
+    return ctx.reply(`${callerNick},\n⏳ • Действие «<b>${act.label}</b>» на перезарядке! Следующие действия будут доступны через <b>${timeStr}</b>.`, { parse_mode: 'HTML' });
+  }
+
+  // 4. Применение отката (для премиум-пар откат на 35% быстрее, как на celya.ru)
+  const cooldownDuration = isPrem ? Math.round(act.cd * 0.65) : act.cd;
+  setActionCooldown(marriage, userId, act.id, cooldownDuration);
+  marriage.markModified('actionCooldowns');
+
+  // 5. Начисление искр и опыта (премиум +20% искр)
+  const sparksEarned = isPrem ? Math.round(act.sparks * 1.2) : act.sparks;
+  marriage.sparks = (marriage.sparks || 0) + sparksEarned;
+  marriage.exp = (marriage.exp || 0) + act.exp;
+  marriage.lastActivity = new Date();
+
+  // 6. Проверка уровня отношений
+  let levelUpNotice = '';
+  const oldLevel = marriage.level || 1;
+  const newLevel = getCoupleLevel(marriage);
+  marriage.level = newLevel;
+  if (newLevel > oldLevel) {
+    const lvlInfo = RELATION_LEVEL_THRESHOLDS.find(t => t.level === newLevel);
+    levelUpNotice = `\n\n🎉 <b>LEVEL UP!</b> Уровень вашей пары повышен до <b>${newLevel}/30</b> («${lvlInfo?.title || ''}»)!`;
+  }
+
+  // 7. Проверка зачатия для интимных действий
+  let conceptionNotice = '';
+  if (act.canConceive && (!marriage.pregnancy || !marriage.pregnancy.isPregnant)) {
+    if (Math.random() < 0.35) {
+      if (!marriage.pregnancy) marriage.pregnancy = {};
+      marriage.pregnancy.isPregnant = true;
+      marriage.pregnancy.startedAt = new Date();
+      marriage.pregnancy.dueAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+      marriage.pregnancy.babyGender = Math.random() > 0.5 ? 'м' : 'ж';
+      marriage.pregnancy.motherId = userId;
+      conceptionNotice = `\n\n🤰 <b>Чудо любви!</b> Кажется, эта страстная ночь принесла плоды... Тест показал две полоски! 👶 Используйте <code>.узи</code>, чтобы узнать подробности!`;
+    }
+  }
+
+  await marriage.save();
+
+  // 8. Кликабельные никнеймы обоих партнеров и оформление по стандарту celya.ru
+  const partnerId = getPartnerId(marriage, userId);
+  const userNick = await getNicknameByTelegramId(userId);
+  const partnerNick = await getNicknameByTelegramId(partnerId);
+  const cdFormatted = formatActionCooldown(cooldownDuration);
+
+  const replyMsg = `${partnerNick}\n${userNick},\n${act.emoji} • ${userNick} ${act.msg} своей половинке ${partnerNick}\n🔥 • Искры +${sparksEarned}\n🕙 • Следующие действия будут доступны через ${cdFormatted}${levelUpNotice}${conceptionNotice}`;
+
+  return ctx.reply(replyMsg, { parse_mode: 'HTML' });
+}
+
+// === ✨ Отображение списка действий отношений (render-функция) ===
+async function renderRelationActions(ctx, expanded = false, edit = false) {
+  const userId = ctx.from.id;
+  const marriage = await Marriage.findOne({
+    $or: [{ userId }, { partnerId: userId }],
+    status: 'accepted'
+  });
+  if (!marriage) {
+    if (edit) {
+      return ctx.editMessageText('❌ Вы не состоите в отношениях.\n💡 Чтобы предложить отношения: <code>.отн запрос @username</code>', { parse_mode: 'HTML' }).catch(() => {});
+    }
+    return ctx.reply('❌ Вы не состоите в отношениях.\n💡 Чтобы предложить отношения: <code>.отн запрос @username</code>', { parse_mode: 'HTML' });
+  }
+
+  const text = await formatRelationActionsMessage(marriage, expanded, userId);
+  const keyboard = getRelationActionsKeyboard(expanded);
+
+  if (edit) {
+    return ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard }).catch((e) => {
+      if (!e.message.includes('message is not modified')) console.error(e);
     });
-    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+  }
+  return ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+}
 
-    let userCd = null;
-    if (marriage.actionCooldowns && typeof marriage.actionCooldowns.get === 'function') {
-      userCd = marriage.actionCooldowns.get(String(userId));
-    } else if (marriage.actionCooldowns) {
-      userCd = marriage.actionCooldowns[String(userId)];
-    }
-
-    let cdText = '✅ Действия готовы к использованию!';
-    if (userCd && new Date() < new Date(userCd)) {
-      const leftSec = Math.ceil((new Date(userCd).getTime() - Date.now()) / 1000);
-      const m = Math.floor(leftSec / 60);
-      const s = leftSec % 60;
-      cdText = `⏳ Перезарядка: ещё ${m}м ${s}с`;
-    }
-
-    let list = '<b>🔄 РОМАНТИЧЕСКИЕ ДЕЙСТВИЯ ПАРЫ:</b>\n\n';
-    list += `⏱️ <b>Статус отката:</b> ${cdText}\n\n`;
-
-    for (const act of RELATION_ACTIONS) {
-      const isUnlocked = (marriage.level || 1) >= act.level;
-      const statusIcon = isUnlocked ? '✅' : '🔒';
-      const cdMin = Math.round(act.cd / 60000);
-      list += `[${act.level}] ${statusIcon} • <b>${act.label}</b> | 🔥 +${act.sparks} | ⏱️ ${cdMin}м\n`;
-    }
-
-    list += `\n💡 <i>Чтобы выполнить действие, напишите:</i>\n<code>.отн &lt;действие&gt;</code> (например: <code>.отн комплимент</code>, <code>.отн завтрак</code>, <code>.отн цветы</code>)`;
-
-    return ctx.reply(list, { parse_mode: 'HTML' });
+// === ✨ Список действий отношений (.отн действия) ===
+bot.hears(/^[.!\/]?отн действия$/i, async (ctx) => {
+  try {
+    return await renderRelationActions(ctx, false, false);
   } catch (e) {
     console.error('Ошибка в .отн действия:', e);
     ctx.reply('❌ Произошла ошибка.');
   }
 });
 
-// === 🎭 Выполнение действия отношений (.отн <действие>) ===
-bot.hears(/^\.отн\s+(комплимент|завтрак|цветы|фильм|массаж|прогулка|романтика|постель|пикник|путешествие|танец|сюрприз|клятва|круиз|вечность)$/i, async (ctx) => {
+// === 🔘 Интерактивное переключение: Развернуть / Свернуть список действий ===
+bot.action('rel_actions_expand', async (ctx) => {
+  try {
+    await ctx.answerCbQuery().catch(() => {});
+    return await renderRelationActions(ctx, true, true);
+  } catch (e) {
+    console.error('Ошибка в rel_actions_expand:', e.message);
+  }
+});
+
+bot.action('rel_actions_collapse', async (ctx) => {
+  try {
+    await ctx.answerCbQuery().catch(() => {});
+    return await renderRelationActions(ctx, false, true);
+  } catch (e) {
+    console.error('Ошибка в rel_actions_collapse:', e.message);
+  }
+});
+
+// === 💎 Меню покупки премиум-отношений (кнопка) ===
+bot.action('rel_buy_premium', async (ctx) => {
   try {
     const userId = ctx.from.id;
-    const actionName = ctx.match[1].toLowerCase();
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) {
+      return ctx.answerCbQuery('❌ Вы не состоите в отношениях.', { show_alert: true });
+    }
+    await ctx.answerCbQuery().catch(() => {});
 
+    const user = await User.findOne({ telegramId: userId });
+    const userCookies = user?.cookies || 0;
+    const isPrem = isCouplePremium(marriage);
+    let statusText = '❌ Не активен';
+    if (isPrem) {
+      if (marriage.premiumExpiresAt) {
+        statusText = `✅ Активен до ${new Date(marriage.premiumExpiresAt).toLocaleDateString('ru-RU')}`;
+      } else {
+        statusText = '👑 Активен навсегда';
+      }
+    }
+
+    const premText = `💎 <b>ПРЕМИУМ-СТАТУС ОТНОШЕНИЙ</b> 💎\n\n` +
+      `<b>Текущий статус пары:</b> ${statusText}\n` +
+      `💰 <b>Ваш баланс печенек:</b> ${utils.sp(userCookies)} 🍪\n\n` +
+      `✨ <b>Преимущества премиум-отношений:</b>\n` +
+      `• 🔮 Доступ ко всем эксклюзивным премиум-действиям: «Аура эмпатии», «Нейронная связь», «Параллельный мир» и др.\n` +
+      `• ⚡ Ускоренная перезарядка: кулдаун ВСЕХ действий снижен на 30%!\n` +
+      `• 🔥 Бонус искр: +20% ко всем получаемым искрам!\n` +
+      `• 👑 Специальный статус и значок пары в профиле\n\n` +
+      `🛍️ <b>Выберите тариф подписки:</b>`;
+
+    const premKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('💎 7 дней — 5.000 🍪', 'rel_buy_prem_7')],
+      [Markup.button.callback('💎 30 дней — 15.000 🍪', 'rel_buy_prem_30')],
+      [Markup.button.callback('👑 Навсегда — 50.000 🍪', 'rel_buy_prem_perm')],
+      [Markup.button.callback('◀️ Назад к действиям', 'rel_back_to_actions')]
+    ]);
+
+    await ctx.reply(premText, { parse_mode: 'HTML', ...premKeyboard });
+  } catch (e) {
+    console.error('Ошибка в rel_buy_premium:', e);
+  }
+});
+
+// Возврат к действиям
+bot.action('rel_back_to_actions', async (ctx) => {
+  try {
+    await ctx.answerCbQuery().catch(() => {});
+    return await renderRelationActions(ctx, false, false);
+  } catch (e) {
+    console.error('Ошибка в rel_back_to_actions:', e);
+  }
+});
+
+// Обработка покупки тарифов премиума
+bot.action(/^rel_buy_prem_(7|30|perm)$/, async (ctx) => {
+  try {
+    const plan = ctx.match[1];
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) {
+      return ctx.answerCbQuery('❌ Вы не состоите в отношениях.', { show_alert: true });
+    }
+
+    const prices = { '7': 5000, '30': 15000, 'perm': 50000 };
+    const cost = prices[plan];
+
+    const user = await User.findOne({ telegramId: userId });
+    if (!user || (user.cookies || 0) < cost) {
+      return ctx.answerCbQuery(`❌ Недостаточно печенек! Требуется: ${utils.sp(cost)} 🍪`, { show_alert: true });
+    }
+
+    user.cookies -= cost;
+    const now = Date.now();
+    let currentExp = marriage.premiumExpiresAt && new Date(marriage.premiumExpiresAt) > new Date()
+      ? new Date(marriage.premiumExpiresAt).getTime()
+      : now;
+
+    let newExp;
+    let periodText;
+    if (plan === '7') {
+      newExp = new Date(currentExp + 7 * 24 * 60 * 60 * 1000);
+      periodText = '7 дней';
+    } else if (plan === '30') {
+      newExp = new Date(currentExp + 30 * 24 * 60 * 60 * 1000);
+      periodText = '30 дней';
+    } else {
+      newExp = new Date(now + 100 * 365 * 24 * 60 * 60 * 1000);
+      periodText = 'навсегда';
+    }
+
+    marriage.isPremium = true;
+    marriage.isPremiumRelations = true;
+    marriage.premiumUntil = newExp;
+    marriage.premiumExpiresAt = newExp;
+
+    await Promise.all([user.save(), marriage.save()]);
+
+    await ctx.answerCbQuery('🎉 Премиум-отношения успешно активированы!', { show_alert: true });
+
+    const partnerId = getPartnerId(marriage, userId);
+    const userNickname = await getNicknameByTelegramId(userId);
+
+    await ctx.reply(
+      `🎉 <b>ПОЗДРАВЛЯЕМ С ПРЕМИУМ-СТАТУСОМ!</b> 💎\n\n` +
+      `👑 ${userNickname} активировал(а) Премиум-отношения для вашей пары на <b>${periodText}</b>!\n\n` +
+      `⚡ Кулдауны действий снижены на 30%\n🔥 Получаемые искры увеличены на 20%\n✨ Открыт доступ ко всем премиум-действиям (<code>.отн действия</code>)!`,
+      { parse_mode: 'HTML' }
+    );
+
+    ctx.telegram.sendMessage(
+      partnerId,
+      `🎉 <b>Премиум-отношения активированы!</b> 💎\n\nВаша вторая половинка приобрела Премиум-статус отношений для вашей пары на <b>${periodText}</b>! 👑`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+
+  } catch (e) {
+    console.error('Ошибка покупки премиума отношений:', e);
+    ctx.answerCbQuery('❌ Ошибка при оформлении премиума.', { show_alert: true });
+  }
+});
+
+// === 💎 Текстовая команда .отн премиум ===
+bot.hears(/^\.отн премиум(?:\s+(?:купить\s+)?(7|30|навсегда))?$/i, async (ctx) => {
+  try {
+    const plan = ctx.match[1]?.toLowerCase();
+    const userId = ctx.from.id;
     const marriage = await Marriage.findOne({
       $or: [{ userId }, { partnerId: userId }],
       status: 'accepted'
     });
     if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
 
-    const act = RELATION_ACTIONS.find(a => a.name === actionName);
-    if (!act) return ctx.reply('❌ Такое действие не найдено.');
-
-    if ((marriage.level || 1) < act.level) {
-      return ctx.reply(`🔒 Действие «<b>${act.label}</b>» откроется на <b>${act.level}</b> уровне отношений! (Ваш уровень: ${marriage.level || 1})`, { parse_mode: 'HTML' });
-    }
-
-    let userCd = null;
-    if (marriage.actionCooldowns && typeof marriage.actionCooldowns.get === 'function') {
-      userCd = marriage.actionCooldowns.get(String(userId));
-    } else if (marriage.actionCooldowns) {
-      userCd = marriage.actionCooldowns[String(userId)];
-    }
-
-    if (userCd && new Date() < new Date(userCd)) {
-      const leftSec = Math.ceil((new Date(userCd).getTime() - Date.now()) / 1000);
-      const m = Math.floor(leftSec / 60);
-      const s = leftSec % 60;
-      return ctx.reply(`⏳ Действие на перезарядке! Подождите ещё <b>${m}м ${s}с</b>.`, { parse_mode: 'HTML' });
-    }
-
-    // Применяем откат
-    const cooldownDuration = marriage.isPremium ? Math.round(act.cd * 0.7) : act.cd;
-    if (!marriage.actionCooldowns) marriage.actionCooldowns = new Map();
-    if (typeof marriage.actionCooldowns.set === 'function') {
-      marriage.actionCooldowns.set(String(userId), new Date(Date.now() + cooldownDuration));
-    } else {
-      marriage.actionCooldowns[String(userId)] = new Date(Date.now() + cooldownDuration);
-    }
-
-    // Начисляем искры и опыт
-    marriage.sparks = (marriage.sparks || 0) + act.sparks;
-    marriage.exp = (marriage.exp || 0) + act.exp;
-    marriage.lastActivity = new Date();
-
-    // Проверка повышения уровня
-    let levelUpNotice = '';
-    const maxExp = marriage.level * 250;
-    if (marriage.exp >= maxExp && marriage.level < 30) {
-      marriage.level += 1;
-      marriage.exp = marriage.exp - maxExp;
-      const bonusSparks = marriage.level * 50;
-      marriage.sparks += bonusSparks;
-      levelUpNotice = `\n\n🎉 <b>LEVEL UP!</b> Уровень вашей пары повышен до <b>${marriage.level}</b>!\n🔥 Бонус за уровень: +${bonusSparks} искр!`;
-    }
-
-    // Проверка зачатия для действия постель
-    let conceptionNotice = '';
-    if (act.canConceive && (!marriage.pregnancy || !marriage.pregnancy.isPregnant)) {
-      if (Math.random() < 0.3) {
-        if (!marriage.pregnancy) marriage.pregnancy = {};
-        marriage.pregnancy.isPregnant = true;
-        marriage.pregnancy.startedAt = new Date();
-        marriage.pregnancy.dueAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
-        marriage.pregnancy.babyGender = Math.random() > 0.5 ? 'м' : 'ж';
-        marriage.pregnancy.motherId = userId;
-        conceptionNotice = `\n\n🤰 <b>Чудо любви!</b> Кажется, эта страстная ночь принесла плоды... Тест показал две полоски! 👶 Используйте <code>.узи</code>, чтобы узнать подробности!`;
+    if (!plan) {
+      // Показать меню с кнопками
+      const user = await User.findOne({ telegramId: userId });
+      const userCookies = user?.cookies || 0;
+      const isPrem = isCouplePremium(marriage);
+      let statusText = '❌ Не активен';
+      if (isPrem) {
+        if (marriage.premiumExpiresAt) {
+          statusText = `✅ Активен до ${new Date(marriage.premiumExpiresAt).toLocaleDateString('ru-RU')}`;
+        } else {
+          statusText = '👑 Активен навсегда';
+        }
       }
+
+      const premText = `💎 <b>ПРЕМИУМ-СТАТУС ОТНОШЕНИЙ</b> 💎\n\n` +
+        `<b>Текущий статус пары:</b> ${statusText}\n` +
+        `💰 <b>Ваш баланс печенек:</b> ${utils.sp(userCookies)} 🍪\n\n` +
+        `✨ <b>Преимущества премиум-отношений:</b>\n` +
+        `• 🔮 Эксклюзивные действия: «Аура эмпатии», «Нейронная связь», «Параллельный мир» и др.\n` +
+        `• ⚡ Кулдаун всех действий снижен на 30%!\n` +
+        `• 🔥 +20% ко всем получаемым искрам!\n\n` +
+        `🛍️ <i>Для покупки напишите:</i>\n` +
+        `<code>.отн премиум купить 7</code> (5.000 🍪)\n` +
+        `<code>.отн премиум купить 30</code> (15.000 🍪)\n` +
+        `<code>.отн премиум купить навсегда</code> (50.000 🍪)`;
+
+      const premKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('💎 7 дней — 5.000 🍪', 'rel_buy_prem_7')],
+        [Markup.button.callback('💎 30 дней — 15.000 🍪', 'rel_buy_prem_30')],
+        [Markup.button.callback('👑 Навсегда — 50.000 🍪', 'rel_buy_prem_perm')],
+        [Markup.button.callback('◀️ Назад к действиям', 'rel_back_to_actions')]
+      ]);
+
+      return ctx.reply(premText, { parse_mode: 'HTML', ...premKeyboard });
     }
 
-    await marriage.save();
+    const key = plan === 'навсегда' ? 'perm' : plan;
+    const prices = { '7': 5000, '30': 15000, 'perm': 50000 };
+    const cost = prices[key];
+    if (!cost) return ctx.reply('❌ Неверный тариф. Доступно: <code>7</code>, <code>30</code>, <code>навсегда</code>');
 
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
-    const [userDoc, partnerDoc] = await Promise.all([
-      User.findOne({ telegramId: userId }),
-      User.findOne({ telegramId: partnerId })
-    ]);
+    const user = await User.findOne({ telegramId: userId });
+    if (!user || (user.cookies || 0) < cost) {
+      return ctx.reply(`❌ Недостаточно печенек! Требуется: <b>${utils.sp(cost)}</b> 🍪, у вас: <b>${utils.sp(user?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
+    }
 
-    const userNick = userDoc?.nickname || `User${userId}`;
-    const partnerNick = partnerDoc?.nickname || `User${partnerId}`;
+    user.cookies -= cost;
+    const now = Date.now();
+    let currentExp = marriage.premiumExpiresAt && new Date(marriage.premiumExpiresAt) > new Date()
+      ? new Date(marriage.premiumExpiresAt).getTime()
+      : now;
 
-    const replyMsg = `${act.emoji} | <a href="tg://user?id=${userId}">${userNick}</a> ${act.msg} <a href="tg://user?id=${partnerId}">${partnerNick}</a>!\n\n🔥 +${act.sparks} искр | ✨ +${act.exp} XP${levelUpNotice}${conceptionNotice}`;
+    let newExp;
+    let periodText;
+    if (key === '7') {
+      newExp = new Date(currentExp + 7 * 24 * 60 * 60 * 1000);
+      periodText = '7 дней';
+    } else if (key === '30') {
+      newExp = new Date(currentExp + 30 * 24 * 60 * 60 * 1000);
+      periodText = '30 дней';
+    } else {
+      newExp = new Date(now + 100 * 365 * 24 * 60 * 60 * 1000);
+      periodText = 'навсегда';
+    }
 
-    return ctx.reply(replyMsg, { parse_mode: 'HTML' });
+    marriage.isPremium = true;
+    marriage.isPremiumRelations = true;
+    marriage.premiumUntil = newExp;
+    marriage.premiumExpiresAt = newExp;
+
+    await Promise.all([user.save(), marriage.save()]);
+
+    const partnerId = getPartnerId(marriage, userId);
+    const userNickname = await getNicknameByTelegramId(userId);
+
+    await ctx.reply(
+      `🎉 <b>ПОЗДРАВЛЯЕМ С ПРЕМИУМ-СТАТУСОМ!</b> 💎\n\n` +
+      `👑 ${userNickname} активировал(а) Премиум-отношения для вашей пары на <b>${periodText}</b>!\n\n` +
+      `⚡ Кулдауны действий снижены на 30%\n🔥 Получаемые искры увеличены на 20%\n✨ Открыт доступ ко всем премиум-действиям (<code>.отн действия</code>)!`,
+      { parse_mode: 'HTML' }
+    );
+
+    ctx.telegram.sendMessage(
+      partnerId,
+      `🎉 <b>Премиум-отношения активированы!</b> 💎\n\nВаша вторая половинка приобрела Премиум-статус отношений для вашей пары на <b>${periodText}</b>! 👑`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+
   } catch (e) {
-    console.error('Ошибка в действии .отн:', e);
+    console.error('Ошибка в .отн премиум:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🎭 Динамическое выполнение действий отношений (.отн <действие>) ===
+bot.hears(/^[.!\/]?отн\s+(.+)$/i, async (ctx, next) => {
+  try {
+    const rawAction = ctx.match[1].trim();
+
+    // 1. Покупка подарка: .отн подарить <номер>
+    if (/^подарить\s+\d+$/i.test(rawAction)) {
+      return next();
+    }
+
+    // 2. Исключаем системные команды раздела отношений
+    const systemKeywords = [
+      'запрос', 'да', 'нет', 'развод', 'я', 'статус', 'профиль',
+      'действия', 'дом', 'искры', 'подарки', 'пт', 'брак', 'помощь',
+      'свадьба', 'банк', 'премиум', 'прем', 'топ', 'годовщина',
+      'статистика', 'стата', 'задания', 'обида', 'документ', 'список'
+    ];
+    const firstWord = rawAction.split(/\s+/)[0].toLowerCase();
+    if (systemKeywords.includes(firstWord)) {
+      return next();
+    }
+
+    const act = findRelationAction(rawAction);
+    if (!act) {
+      return next();
+    }
+
+    return await executeRelationAction(ctx, act);
+  } catch (e) {
+    console.error('Ошибка в обработчике действия .отн:', e);
     ctx.reply('❌ Произошла ошибка при выполнении действия.');
   }
 });
 
-// Отдельная команда .постель как шорткат
-bot.hears(/^\.постель$/i, async (ctx) => {
-  ctx.message.text = '.отн постель';
-  return bot.handleUpdate(ctx.update);
+// Отдельная команда .постель / .секс / .кекс как шорткат
+bot.hears(/^[.!\/]?(постель|секс|кекс)$/i, async (ctx) => {
+  const act = ALL_RELATION_ACTIONS.find(a => a.id === 'постель');
+  if (act) return executeRelationAction(ctx, act);
 });
 
 // === 🔥 Искры отношений (.отн искры / .отн искры купить <кол-во>) ===
@@ -3720,7 +4263,7 @@ bot.hears(/^\.отн подарить\s+(\d+)$/i, async (ctx) => {
       return ctx.reply(`❌ У вас не хватает печенек. Подарок стоит: <b>${utils.sp(gift.price)}</b> 🍪, у вас: <b>${utils.sp(user?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
     }
 
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const partner = await User.findOne({ telegramId: partnerId });
 
     user.cookies -= gift.price;
@@ -3995,25 +4538,103 @@ bot.hears(/^\.отн пт(?:\s+(яйцо(?:\s+(обычное|редкое|ле�
 bot.action(/^rel_menu_(actions|house|kids|pets|gifts|sparks)$/, async (ctx) => {
   try {
     const action = ctx.match[1];
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery().catch(() => {});
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) {
+      return ctx.reply('❌ Вы не состоите в отношениях.\n💡 Чтобы предложить отношения: <code>.отн запрос @username</code>', { parse_mode: 'HTML' });
+    }
+
     if (action === 'actions') {
-      ctx.message = { text: '.отн действия', chat: ctx.chat, from: ctx.from };
-      return bot.handleUpdate(ctx.update);
+      return renderRelationActions(ctx, false, false);
     } else if (action === 'house') {
-      ctx.message = { text: '.отн дом', chat: ctx.chat, from: ctx.from };
-      return bot.handleUpdate(ctx.update);
+      if (!marriage.house || !marriage.house.type) {
+        marriage.house = { type: 'Шалаш в лесу', level: 1, comfort: 10, safeCookies: 0 };
+      }
+      const currentLvl = marriage.house.level || 1;
+      const currentHouse = RELATION_HOUSES.find(h => h.level === currentLvl) || RELATION_HOUSES[0];
+      const nextHouse = RELATION_HOUSES.find(h => h.level === currentLvl + 1);
+      const upgradeText = nextHouse
+        ? `\n⬆️ <b>Следующее жилье:</b> ${nextHouse.icon} ${nextHouse.name} (Стоимость: ${utils.sp(currentHouse.upgradeCost)} 🔥)\n💡 <i>Для улучшения введите:</i> <code>.отн дом улучшить</code>`
+        : '\n👑 <i>У вас максимальное жилье!</i>';
+
+      return ctx.reply(`
+${currentHouse.icon} <b>ОБЩИЙ ДОМ ПАРЫ</b>
+
+🏡 <b>Тип жилья:</b> ${marriage.house.type} (${currentLvl}/6 ур.)
+✨ <b>Уровень уюта:</b> ${marriage.house.comfort}
+💰 <b>Семейный сейф:</b> ${utils.sp(marriage.house.safeCookies || 0)} 🍪
+${upgradeText}
+
+💡 <i>Команды сейфа: .отн дом сейф положить/снять &lt;сумма&gt;</i>
+`, { parse_mode: 'HTML' });
     } else if (action === 'kids') {
-      ctx.message = { text: '.рб', chat: ctx.chat, from: ctx.from };
-      return bot.handleUpdate(ctx.update);
+      checkAndDeliverBaby(marriage);
+      if (!marriage.children || marriage.children.length === 0) {
+        return ctx.reply('👶 В вашей семье пока нет детей.\n💡 Чтобы зачать ребенка, используйте <code>.постель</code> и пройдите <code>.узи</code>!', { parse_mode: 'HTML' });
+      }
+
+      let listText = '👶 <b>ДЕТИ В ВАШЕЙ СЕМЬЕ:</b>\n\n';
+      marriage.children.forEach((c, idx) => {
+        const genderIcon = c.gender === 'м' ? '👦' : '👧';
+        const ageDays = Math.max(1, Math.floor((Date.now() - new Date(c.birthDate).getTime()) / (1000 * 60 * 60 * 24)));
+        listText += `[${idx + 1}] ${genderIcon} <b>${c.name}</b> (Возраст: ${ageDays} дн.)\n`;
+        listText += `     ❤️ Здоровье: ${c.health || 100}/100 [${generateProgressBar(c.health || 100, 100, 8)}]\n`;
+        listText += `     😊 Счастье: ${c.happiness || 80}/100 [${generateProgressBar(c.happiness || 80, 100, 8)}]\n`;
+        listText += `     🧠 Интеллект: ${c.intellect || 50}/100 [${generateProgressBar(c.intellect || 50, 100, 8)}]\n\n`;
+      });
+      listText += `💡 <i>Команды заботы:</i>\n<code>.рб покормить [номер]</code>\n<code>.рб поиграть [номер]</code>\n<code>.рб имя [номер] [Новое Имя]</code>`;
+      return ctx.reply(listText, { parse_mode: 'HTML' });
     } else if (action === 'pets') {
-      ctx.message = { text: '.отн пт', chat: ctx.chat, from: ctx.from };
-      return bot.handleUpdate(ctx.update);
+      if (!marriage.pets || marriage.pets.length === 0) {
+        return ctx.reply(`
+🐾 <b>МЕНЮ ПИТОМЦЕВ ПАРЫ</b>
+
+<i>У вашей пары пока нет питомцев. Приобретите яйцо в инкубаторе:</i>
+
+🥚 <b>Обычное яйцо:</b> 500 🔥 (Котик, Щенок)
+🔮 <b>Редкое яйцо:</b> 1.500 🔥 (Лисёнок, Енот, Панда)
+👑 <b>Легендарное яйцо:</b> 5.000 🔥 (Медвежонок Grizzly, Дракон, Феникс)
+
+💡 <i>Для покупки напишите:</i>
+<code>.отн пт яйцо обычное</code>
+<code>.отн пт яйцо редкое</code>
+<code>.отн пт яйцо легендарное</code>
+`, { parse_mode: 'HTML' });
+      }
+
+      let pText = '🐾 <b>ПИТОМЦЫ ВАШЕЙ ПАРЫ:</b>\n\n';
+      marriage.pets.forEach((pet, i) => {
+        pText += `[${i + 1}] <b>${pet.name}</b> (${pet.rarity}) — Ур. ${pet.level}\n`;
+        pText += `     🍖 Сытость: ${pet.hunger || 100}/100 [${generateProgressBar(pet.hunger || 100, 100, 8)}]\n`;
+        pText += `     🎾 Счастье: ${pet.happiness || 100}/100 [${generateProgressBar(pet.happiness || 100, 100, 8)}]\n\n`;
+      });
+      pText += `💡 <i>Команды заботы:</i>\n<code>.отн пт покормить [номер]</code>\n<code>.отн пт поиграть [номер]</code>\n<code>.отн пт яйцо &lt;тип&gt;</code> — купить новое яйцо`;
+      return ctx.reply(pText, { parse_mode: 'HTML' });
     } else if (action === 'gifts') {
-      ctx.message = { text: '.отн подарки', chat: ctx.chat, from: ctx.from };
-      return bot.handleUpdate(ctx.update);
+      let text = '🎁 <b>РОМАНТИЧЕСКИЙ МАГАЗИН ПОДАРКОВ</b> 🎁\n\nПорадуйте любимого человека подарком в профиль пары:\n\n';
+      for (const g of GIFTS_CATALOG) {
+        text += `[${g.id}] ${g.icon} • <b>${g.name}</b>\n`;
+        text += `     💰 Цена: ${utils.sp(g.price)} 🍪 | 🔥 Даёт: +${utils.sp(g.sparks)} искр\n`;
+      }
+      text += '\n💡 <i>Чтобы подарить, напишите:</i>\n<code>.отн подарить &lt;номер 1-6&gt;</code> (например: <code>.отн подарить 2</code>)';
+      return ctx.reply(text, { parse_mode: 'HTML' });
     } else if (action === 'sparks') {
-      ctx.message = { text: '.отн искры', chat: ctx.chat, from: ctx.from };
-      return bot.handleUpdate(ctx.update);
+      marriage.sparks = marriage.sparks ?? 100;
+      return ctx.reply(`
+┏ 🔥 <b>МАГАЗИН И БАЛАНС ИСКР</b> 🔥 ┓
+
+💰 <b>Текущий баланс искр пары:</b> ${utils.sp(marriage.sparks)} 🔥
+⭐ <b>Уровень отношений:</b> ${marriage.level}/30
+
+💡 <b>Курс обмена:</b> 1 искра = 10 печенек 🍪
+Для покупки искр напишите:
+<code>.отн искры купить &lt;количество&gt;</code>
+<i>(например: <code>.отн искры купить 100</code> обойдется в 1.000 печенек)</i>
+`, { parse_mode: 'HTML' });
     }
   } catch (e) {
     console.error('Ошибка в rel_menu action:', e.message);
@@ -4034,7 +4655,8 @@ bot.hears(/^\.отн брак$/, async (ctx) => {
       const user2 = await getNicknameByTelegramId(marriage.partnerId);
       
       // Вычисляем длительность отношений
-      const relationshipDuration = Math.floor((Date.now() - marriage.acceptedAt.getTime()) / (1000 * 60 * 60 * 24));
+      const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
+      const relationshipDuration = Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
       
       response += `💍 ${user1} ❤️ ${user2}\n`;
       response += `📅 ${relationshipDuration} дней вместе\n\n`;
@@ -4127,7 +4749,7 @@ bot.hears(/^\.отн подарок\s+(\d+)$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в отношениях.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     
     // ⚡ ОПТИМИЗАЦИЯ: Загружаем партнера одним запросом
     const partner = await User.findOne({ telegramId: partnerId });
@@ -4141,7 +4763,7 @@ bot.hears(/^\.отн подарок\s+(\d+)$/, async (ctx) => {
     partner.cookies += giftAmount;
     
     // Обновляем статистику брака
-    if (marriage.userId === userId) {
+    if (Number(marriage.userId) === Number(userId)) {
       marriage.giftsSent += 1;
       marriage.giftsReceived += 1;
     } else {
@@ -4195,19 +4817,21 @@ bot.hears(/^\.отн статистика$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в отношениях.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
     // Вычисляем длительность отношений
-    const relationshipDuration = Math.floor((Date.now() - marriage.acceptedAt.getTime()) / (1000 * 60 * 60 * 24));
+    const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
+    const relationshipDuration = Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
+    const startDateStr = new Date(startDate).toLocaleDateString('ru-RU');
     
     const statsText = `
 💖 <b>Статистика отношений</b>
 
 👫 <b>Пара:</b> ${userNickname} ❤️ ${partnerNickname}
 
-📅 <b>Дата начала:</b> ${marriage.acceptedAt.toLocaleDateString('ru-RU')}
+📅 <b>Дата начала:</b> ${startDateStr}
 ⏰ <b>Длительность:</b> ${relationshipDuration} дней
 
 🎁 <b>Подарки:</b>
@@ -4244,7 +4868,7 @@ bot.hears(/^\.отн поцелуй$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в отношениях.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -4288,7 +4912,7 @@ bot.hears(/^\.отн обнять$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в отношениях.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -4342,7 +4966,7 @@ bot.hears(/^\.отн свидание$/, async (ctx) => {
       return ctx.reply(`❌ У вас недостаточно печенек для свидания. Нужно: ${dateCost}, есть: ${user.cookies}`);
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const partner = await User.findOne({ telegramId: partnerId });
     
     if (!partner) {
@@ -4405,12 +5029,15 @@ bot.hears(/^\.отн свидание$/, async (ctx) => {
 
 // Вспомогательная функция для расчета рейтинга отношений
 function calculateRelationshipScore(marriage) {
-  const daysTogether = Math.floor((Date.now() - marriage.acceptedAt.getTime()) / (1000 * 60 * 60 * 24));
-  const giftScore = marriage.totalGiftValue / 100;
-  const achievementScore = marriage.achievements.length * 500;
-  const bankScore = marriage.jointBank / 10;
+  const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
+  const daysTogether = Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
+  const giftScore = (marriage.totalGiftValue || 0) / 100;
+  const achievementScore = (marriage.achievements?.length || 0) * 500;
+  const bankScore = (marriage.jointBank || 0) / 10;
+  const sparksScore = (marriage.sparks || 0) / 5;
+  const expScore = (marriage.exp || 0) + ((marriage.level || 1) - 1) * 250;
   
-  return Math.floor(daysTogether * 10 + giftScore + achievementScore + bankScore);
+  return Math.floor(daysTogether * 10 + giftScore + achievementScore + bankScore + sparksScore + expScore);
 }
 
 // Вспомогательная функция для расчета уровня отношений
@@ -4429,7 +5056,8 @@ function calculateRelationshipLevel(score) {
 
 // Функция для проверки и добавления достижений
 async function checkAndAddAchievements(marriage) {
-  const daysTogether = Math.floor((Date.now() - marriage.acceptedAt.getTime()) / (1000 * 60 * 60 * 24));
+  const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
+  const daysTogether = Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
   let newAchievements = [];
   
   if (daysTogether >= 7 && !marriage.achievements.includes('Молодожены')) {
@@ -4491,7 +5119,7 @@ bot.hears(/^\.отн свадьба$/, async (ctx) => {
       return ctx.reply(`❌ Вы уже провели свадебную церемонию ${weddingDateStr}!`);
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -4549,7 +5177,7 @@ bot.action(/^wedding_gift_(.+)_(\d+)$/, async (ctx) => {
     }
     
     // Проверяем, не является ли гость одним из молодоженов
-    if (guestId === marriage.userId || guestId === marriage.partnerId) {
+    if (Number(guestId) === Number(marriage.userId) || Number(guestId) === Number(marriage.partnerId)) {
       return ctx.answerCbQuery('❌ Вы не можете дарить подарки сами себе!', { show_alert: true });
     }
     
@@ -4609,7 +5237,7 @@ bot.hears(/^\.отн банк$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -4692,7 +5320,7 @@ bot.hears(/^\.отн банк внести\s+(\d+)$/, async (ctx) => {
     await user.save();
     await marriage.save();
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     
     ctx.reply(
@@ -4736,7 +5364,7 @@ bot.hears(/^\.отн банк снять\s+(\d+)$/, async (ctx) => {
       return ctx.reply(`❌ В совместном банке недостаточно средств. Доступно: ${marriage.jointBank} печенек`);
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -4787,8 +5415,8 @@ bot.action(/^bank_withdraw_confirm_(.+)_(\d+)_(\d+)$/, async (ctx) => {
     }
     
     // Проверяем, что подтверждает именно партнер
-    const partnerId = marriage.userId === requesterId ? marriage.partnerId : marriage.userId;
-    if (confirmerId !== partnerId) {
+    const partnerId = getPartnerId(marriage, requesterId);
+    if (Number(confirmerId) !== Number(partnerId)) {
       return ctx.answerCbQuery('❌ Это не ваш запрос.', { show_alert: true });
     }
     
@@ -4818,7 +5446,7 @@ bot.action(/^bank_withdraw_confirm_(.+)_(\d+)_(\d+)$/, async (ctx) => {
     await requester.save();
     await marriage.save();
     
-    const requesterNickname = await getNicknameByTelegramId(requesterId);
+    const confirmerNickname = await getNicknameByTelegramId(confirmerId);
     
     ctx.answerCbQuery('✅ Снятие средств подтверждено!', { show_alert: true });
     ctx.editMessageText(
@@ -4829,7 +5457,7 @@ bot.action(/^bank_withdraw_confirm_(.+)_(\d+)_(\d+)$/, async (ctx) => {
     // Уведомляем того, кто запросил
     ctx.telegram.sendMessage(
       requesterId,
-      `✅ ${requesterNickname} одобрил(а) снятие средств!\n\n💰 Вы получили ${amount} печенек\n🏦 Баланс банка: ${marriage.jointBank} печенек`,
+      `✅ ${confirmerNickname} одобрил(а) снятие средств!\n\n💰 Вы получили ${amount} печенек\n🏦 Баланс банка: ${marriage.jointBank} печенек`,
       { parse_mode: 'HTML' }
     ).catch(() => {});
     
@@ -4853,8 +5481,8 @@ bot.action(/^bank_withdraw_reject_(.+)_(\d+)_(\d+)$/, async (ctx) => {
     }
     
     // Проверяем, что отклоняет именно партнер
-    const partnerId = marriage.userId === requesterId ? marriage.partnerId : marriage.userId;
-    if (confirmerId !== partnerId) {
+    const partnerId = getPartnerId(marriage, requesterId);
+    if (Number(confirmerId) !== Number(partnerId)) {
       return ctx.answerCbQuery('❌ Это не ваш запрос.', { show_alert: true });
     }
     
@@ -4891,12 +5519,12 @@ bot.hears(/^\.отн топ$/, async (ctx) => {
     // Обновляем рейтинги всех пар
     for (const marriage of marriages) {
       marriage.relationshipScore = calculateRelationshipScore(marriage);
-      marriage.level = calculateRelationshipLevel(marriage.relationshipScore);
+      // Не затираем 30-уровневую систему прогресса пары
       await marriage.save();
     }
     
     // Сортируем по рейтингу
-    marriages.sort((a, b) => b.relationshipScore - a.relationshipScore);
+    marriages.sort((a, b) => (b.relationshipScore || 0) - (a.relationshipScore || 0));
     
     let topText = '🏆 <b>ТОП-10 ПАР</b> 🏆\n\n';
     
@@ -4905,14 +5533,15 @@ bot.hears(/^\.отн топ$/, async (ctx) => {
       const marriage = topMarriages[i];
       const user1 = await getNicknameByTelegramId(marriage.userId);
       const user2 = await getNicknameByTelegramId(marriage.partnerId);
-      const daysTogether = Math.floor((Date.now() - marriage.acceptedAt.getTime()) / (1000 * 60 * 60 * 24));
+      const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
+      const daysTogether = Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
       
       const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
       
       topText += `${medal} ${user1} ❤️ ${user2}\n`;
-      topText += `   📊 Рейтинг: ${marriage.relationshipScore} | ⭐ Уровень: ${marriage.level}\n`;
+      topText += `   📊 Рейтинг: ${marriage.relationshipScore || 0} | ⭐ Уровень: ${marriage.level || 1}/30\n`;
       topText += `   📅 Дней вместе: ${daysTogether}\n`;
-      topText += `   🏦 Совместный банк: ${marriage.jointBank} 🍪\n\n`;
+      topText += `   🏦 Совместный банк: ${marriage.jointBank || 0} 🍪\n\n`;
     }
     
     ctx.reply(topText, { parse_mode: 'HTML' });
@@ -4937,17 +5566,17 @@ bot.hears(/^\.отн годовщина$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
     
-    const startDate = marriage.acceptedAt;
+    const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
     const now = new Date();
-    const daysTogether = Math.floor((now - startDate) / (1000 * 60 * 60 * 24));
+    const daysTogether = Math.max(0, Math.floor((now.getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
     
     // Вычисляем следующую годовщину
     const nextMonth = new Date(startDate);
-    nextMonth.setMonth(nextMonth.getMonth() + Math.ceil((now - startDate) / (1000 * 60 * 60 * 24 * 30)));
+    nextMonth.setMonth(nextMonth.getMonth() + Math.ceil(Math.max(1, (now.getTime() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24 * 30))));
     
-    const daysToNextAnniversary = Math.ceil((nextMonth - now) / (1000 * 60 * 60 * 24));
+    const daysToNextAnniversary = Math.max(0, Math.ceil((nextMonth.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -4990,7 +5619,7 @@ bot.hears(/^\.отн комплимент$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -5045,7 +5674,7 @@ bot.hears(/^\.отн признание$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
@@ -5108,7 +5737,7 @@ bot.hears(/^\.отн сюрприз$/, async (ctx) => {
       return ctx.reply(`❌ Недостаточно печенек для сюрприза. Нужно: ${surpriseCost}`);
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const partner = await User.findOne({ telegramId: partnerId });
     
     if (!partner) {
@@ -5173,7 +5802,7 @@ bot.hears(/^\.отн прогулка$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
     
-    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     const partnerNickname = await getNicknameByTelegramId(partnerId);
     
