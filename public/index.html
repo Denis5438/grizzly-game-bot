@@ -739,8 +739,8 @@
         <span class="nav-badge">3</span>
       </a>
       <a class="nav-item" data-target="cat-relations">
-        <span><span class="nav-item-icon">💍</span>Браки и Отношения</span>
-        <span class="nav-badge">4</span>
+        <span><span class="nav-item-icon">💍</span>Семья и Отношения</span>
+        <span class="nav-badge">11</span>
       </a>
       <a class="nav-item" data-target="cat-rp">
         <span><span class="nav-item-icon">🎭</span>РП-действия</span>
@@ -946,30 +946,53 @@
         </div>
       </div>
 
-      <!-- CATEGORY: MARRIAGE -->
+      <!-- CATEGORY: MARRIAGE & RELATIONS -->
       <div class="category-block" id="cat-relations">
         <div class="section-header">
-          <h2 class="section-title">💍 Семья и Бракосочетания</h2>
-          <p class="section-subtitle">Создавайте пары, женитесь, отслеживайте совместную дату отношений и статус семьи.</p>
+          <h2 class="section-title">💍 Семья, Отношения и Домашний очаг</h2>
+          <p class="section-subtitle">Глубокая система отношений из 8 модулей: 30 уровней пары, общий дом, дети, питомцы, магазин подарков и искры.</p>
         </div>
 
         <div class="command-list">
+          <!-- CARD: GENDER -->
           <div class="cmd-card">
             <div class="cmd-header">
               <div class="cmd-syntax-wrap">
-                <code class="cmd-code">.отн запрос</code>
-                <button class="cmd-copy-btn" data-copy=".отн запрос">📋 Копировать</button>
+                <code class="cmd-code">.мойпол &lt;м / ж&gt;</code>
+                <button class="cmd-copy-btn" data-copy=".мойпол м">📋 Копировать</button>
               </div>
+              <span class="nav-badge">Основы</span>
             </div>
-            <p class="cmd-desc">Отправьте эту команду <b>в ответ (реплаем)</b> на сообщение человека, которому хотите предложить руку и сердце.</p>
+            <p class="cmd-desc">Устанавливает ваш пол (♂️ Мужской или ♀️ Женский). Необходим для правильных окончаний глаголов, ролевых действий и планирования семьи.</p>
             <div class="tg-bubble">
               <div class="tg-sender-row">
                 <div class="tg-avatar">🐻</div>
                 <span class="tg-sender-name">Grizzly</span>
                 <span class="tg-bot-tag">BOT</span>
               </div>
-              <div class="tg-body">💌 Дмитрий предлагает вступить в брак Алине!
-Согласны ли вы стать парой?</div>
+              <div class="tg-body">✅ Ваш пол успешно установлен: <b>Мужской (♂️)</b>!</div>
+            </div>
+          </div>
+
+          <!-- CARD: REQUEST -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.отн запрос &lt;@username или реплай&gt;</code>
+                <button class="cmd-copy-btn" data-copy=".отн запрос">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">Старт пары</span>
+            </div>
+            <p class="cmd-desc">Предложение руки и сердца. Отправляется реплаем или с указанием @юзера. Партнер может нажать кнопку или написать <code>.отн да</code> в течение 2 минут. Пара получает 100 стартовых искр 🔥.</p>
+            <div class="tg-bubble">
+              <div class="tg-sender-row">
+                <div class="tg-avatar">🐻</div>
+                <span class="tg-sender-name">Grizzly</span>
+                <span class="tg-bot-tag">BOT</span>
+              </div>
+              <div class="tg-body">💖 • Алина, внимание! Дмитрий предлагает вступить в отношения.
+⚡ Запрос будет действителен <b>2 минуты</b>.
+💭 Принять решение: <code>.отн да</code> / <code>.отн нет</code></div>
               <div class="tg-buttons-grid">
                 <div class="tg-inline-btn">💖 Согласиться</div>
                 <div class="tg-inline-btn">💔 Отказаться</div>
@@ -977,16 +1000,169 @@
             </div>
           </div>
 
+          <!-- CARD: PROFILE / YA -->
           <div class="cmd-card">
             <div class="cmd-header">
               <div class="cmd-syntax-wrap">
-                <code class="cmd-code">.отн статус</code>
-                <button class="cmd-copy-btn" data-copy=".отн статус">📋 Копировать</button>
+                <code class="cmd-code">.отн я</code>
+                <button class="cmd-copy-btn" data-copy=".отн я">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">синонимы: .отн статус, .отн профиль</span>
+            </div>
+            <p class="cmd-desc">Главная визитка пары: дни вместе, уровень отношений (1-30), прогресс-бар опыта, баланс искр, жильё, дети и питомцы.</p>
+            <div class="tg-bubble">
+              <div class="tg-sender-row">
+                <div class="tg-avatar">🐻</div>
+                <span class="tg-sender-name">Grizzly</span>
+                <span class="tg-bot-tag">BOT</span>
+              </div>
+              <div class="tg-body">💖 <b>ПРОФИЛЬ ВАШЕЙ ПАРЫ</b>
+💑 <b>Пара:</b> Дмитрий (♂️) ❤️ Алина (♀️)
+💍 <b>Свидетельство:</b> №A7F49B
+⏳ <b>Вместе:</b> 42 дн. (с 11.09.2025)
+
+⭐ <b>Уровень отношений:</b> 6/30 [██████░░░░]
+✨ <b>Опыт:</b> 920 / 1500 XP
+🔥 <b>Баланс искр:</b> 1,850 искр
+
+🏠 <b>Дом:</b> Просторная Квартира (Уют: 70)
+💰 <b>Сейф в доме:</b> 450,000 🍪
+👶 <b>Детей в семье:</b> 1
+🐾 <b>Питомцев:</b> 2</div>
+              <div class="tg-buttons-grid">
+                <div class="tg-inline-btn">✨ Действия</div>
+                <div class="tg-inline-btn">🏠 Дом пары</div>
+                <div class="tg-inline-btn">👶 Дети (.рб)</div>
+                <div class="tg-inline-btn">🐾 Питомцы</div>
               </div>
             </div>
-            <p class="cmd-desc">Показывает дату свадьбы, сколько дней вы вместе и уровень взаимной активности пары.</p>
           </div>
 
+          <!-- CARD: ACTIONS & 30 LEVELS -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.отн действия</code>
+                <button class="cmd-copy-btn" data-copy=".отн действия">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">30 уровней</span>
+            </div>
+            <p class="cmd-desc">Показывает 30 романтических действий и статус их перезарядки. Новые действия открываются с ростом уровня пары (комплимент, завтрак, цветы, фильм, массаж, прогулка, свидание, постель, путешествие...).</p>
+            <div class="tg-bubble">
+              <div class="tg-sender-row">
+                <div class="tg-avatar">🐻</div>
+                <span class="tg-sender-name">Grizzly</span>
+                <span class="tg-bot-tag">BOT</span>
+              </div>
+              <div class="tg-body"><b>🔄 РОМАНТИЧЕСКИЕ ДЕЙСТВИЯ ПАРЫ:</b>
+⏱️ <b>Статус отката:</b> ✅ Действия готовы!
+
+[1] ✅ • <b>Сделать комплимент</b> | 🔥 +15 | ⏱️ 5м
+[2] ✅ • <b>Приготовить завтрак</b> | 🔥 +35 | ⏱️ 8м
+[3] ✅ • <b>Подарить цветы</b> | 🔥 +60 | ⏱️ 11м
+[4] ✅ • <b>Посмотреть фильм</b> | 🔥 +80 | ⏱️ 15м
+[5] ✅ • <b>Сделать массаж</b> | 🔥 +120 | ⏱️ 20м
+[8] 🔒 • <b>Уединиться в постели</b> | 🔥 +250 | ⏱️ 35м</div>
+            </div>
+          </div>
+
+          <!-- CARD: HOUSE -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.отн дом</code>
+                <button class="cmd-copy-btn" data-copy=".отн дом">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">6 уровней жилья</span>
+            </div>
+            <p class="cmd-desc">Управление общим домом: просмотр уюта, совместный семейный сейф печенек и улучшение жилья (Шалаш ➔ Студия ➔ Квартира ➔ Коттедж ➔ Пентхаус ➔ Королевская Вилла Grizzly).</p>
+            <div class="tg-bubble">
+              <div class="tg-sender-row">
+                <div class="tg-avatar">🐻</div>
+                <span class="tg-sender-name">Grizzly</span>
+                <span class="tg-bot-tag">BOT</span>
+              </div>
+              <div class="tg-body">🏡 <b>ОБЩИЙ ДОМ ПАРЫ</b>
+🏡 <b>Тип жилья:</b> Просторная Квартира (3/6 ур.)
+✨ <b>Уровень уюта:</b> 70
+💰 <b>Семейный сейф:</b> 450,000 🍪
+
+⬆️ <b>Следующее жилье:</b> 🏠 Загородный Коттедж (Стоимость: 3,000 🔥)
+💡 <i>Улучшить:</i> <code>.отн дом улучшить</code>
+💡 <i>Сейф:</i> <code>.отн дом сейф положить/снять &lt;сумма&gt;</code></div>
+            </div>
+          </div>
+
+          <!-- CARD: GIFTS -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.отн подарки / .отн подарить &lt;номер&gt;</code>
+                <button class="cmd-copy-btn" data-copy=".отн подарки">📋 Копировать</button>
+              </div>
+            </div>
+            <p class="cmd-desc">Романтический магазин подарков для любимого человека (шоколадка, 101 роза, мишка Grizzly, кольцо, колье, спорткар). Подарок приносит паре искры 🔥 и навсегда сохраняется в коллекции.</p>
+          </div>
+
+          <!-- CARD: PREGNANCY & UZI -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.постель / .узи</code>
+                <button class="cmd-copy-btn" data-copy=".узи">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">Беременность и Роды</span>
+            </div>
+            <p class="cmd-desc">При уединении в постели есть 30% шанс наступления беременности. Команда <code>.узи</code> показывает оставшееся время до родов и пол будущего малыша (мальчик / девочка).</p>
+            <div class="tg-bubble">
+              <div class="tg-sender-row">
+                <div class="tg-avatar">🐻</div>
+                <span class="tg-sender-name">Grizzly</span>
+                <span class="tg-bot-tag">BOT</span>
+              </div>
+              <div class="tg-body">🏥 <b>РЕЗУЛЬТАТЫ УЗИ ОБСЛЕДОВАНИЯ</b>
+🤰 <b>Статус:</b> Беременность протекает отлично!
+⏳ <b>До родов осталось:</b> ~8 ч. 30 мин.
+👶 <b>Пол будущего малыша:</b> <b>Мальчик 👦</b></div>
+            </div>
+          </div>
+
+          <!-- CARD: KIDS -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.рб</code>
+                <button class="cmd-copy-btn" data-copy=".рб">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">Дети и воспитание</span>
+            </div>
+            <p class="cmd-desc">Меню детей семьи. Отслеживайте здоровье, счастье и интеллект ребенка. Команды: <code>.рб покормить</code>, <code>.рб поиграть</code>, <code>.рб имя [номер] [Новое Имя]</code>.</p>
+          </div>
+
+          <!-- CARD: PETS -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.отн пт</code>
+                <button class="cmd-copy-btn" data-copy=".отн пт">📋 Копировать</button>
+              </div>
+              <span class="nav-badge">Инкубатор питомцев</span>
+            </div>
+            <p class="cmd-desc">Покупка яиц питомцев за искры (Обычное 🥚, Редкое 🔮, Легендарное 👑). Из яиц вылупляются котята, щенки, панды, дракончики и легендарный Медвежонок Grizzly 🐻!</p>
+          </div>
+
+          <!-- CARD: SPARKS -->
+          <div class="cmd-card">
+            <div class="cmd-header">
+              <div class="cmd-syntax-wrap">
+                <code class="cmd-code">.отн искры / .отн искры купить &lt;кол-во&gt;</code>
+                <button class="cmd-copy-btn" data-copy=".отн искры">📋 Копировать</button>
+              </div>
+            </div>
+            <p class="cmd-desc">Управление валютой любви — искрами 🔥. Курс обмена: 1 искра = 10 печенек. Искры тратятся на прокачку дома и покупку яиц питомцев.</p>
+          </div>
+
+          <!-- CARD: DIVORCE -->
           <div class="cmd-card">
             <div class="cmd-header">
               <div class="cmd-syntax-wrap">
@@ -994,7 +1170,7 @@
                 <button class="cmd-copy-btn" data-copy=".отн развод">📋 Копировать</button>
               </div>
             </div>
-            <p class="cmd-desc">Расторгает текущий брак и обнуляет семейный статус.</p>
+            <p class="cmd-desc">Расторгает текущий брак и аннулирует статус отношений.</p>
           </div>
         </div>
       </div>

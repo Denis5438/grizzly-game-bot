@@ -144,7 +144,7 @@ const UserSchema = new Mongoose.Schema({
     gptcoin: { type: Number, default: 5 }
   },
   partner: { type: Number, default: null },
-
+  gender: { type: String, enum: ['м', 'ж', null], default: null }
 });
 
 // Create the User model
@@ -2759,9 +2759,65 @@ const marriageSchema = new Mongoose.Schema({
     amount: Number,
     date: { type: Date, default: Date.now }
   }],
-  // Рейтинг и уровень
+  // Рейтинг, искры, опыт и уровень (до 30 уровней)
   relationshipScore: { type: Number, default: 0 },
   level: { type: Number, default: 1 },
+  exp: { type: Number, default: 0 },
+  sparks: { type: Number, default: 100 },
+  // Совместный дом пары
+  house: {
+    type: { type: String, default: 'Шалаш' },
+    level: { type: Number, default: 1 },
+    comfort: { type: Number, default: 10 },
+    safeCookies: { type: Number, default: 0 }
+  },
+  // Коллекция романтических подарков
+  giftsList: [{
+    name: String,
+    icon: String,
+    fromId: Number,
+    date: { type: Date, default: Date.now }
+  }],
+  // Беременность
+  pregnancy: {
+    isPregnant: { type: Boolean, default: false },
+    startedAt: { type: Date, default: null },
+    dueAt: { type: Date, default: null },
+    babyGender: { type: String, default: null },
+    motherId: { type: Number, default: null }
+  },
+  // Дети
+  children: [{
+    name: String,
+    gender: String,
+    birthDate: { type: Date, default: Date.now },
+    intellect: { type: Number, default: 50 },
+    happiness: { type: Number, default: 80 },
+    health: { type: Number, default: 100 },
+    discipline: { type: Number, default: 50 },
+    creativity: { type: Number, default: 50 },
+    lastCare: { type: Date, default: Date.now }
+  }],
+  // Питомцы пары
+  pets: [{
+    name: String,
+    type: { type: String, default: 'Котик' },
+    rarity: { type: String, default: 'Обычный' },
+    level: { type: Number, default: 1 },
+    exp: { type: Number, default: 0 },
+    hunger: { type: Number, default: 100 },
+    happiness: { type: Number, default: 100 },
+    lastFed: { type: Date, default: Date.now }
+  }],
+  // Кулдауны действий партнеров
+  actionCooldowns: {
+    type: Map,
+    of: Date,
+    default: {}
+  },
+  // Премиум-статус отношений
+  isPremium: { type: Boolean, default: false },
+  premiumUntil: { type: Date, default: null },
   // Совместные достижения
   achievements: [{ type: String }],
   // Последняя активность
@@ -2788,15 +2844,123 @@ async function getNicknameByTelegramId(telegramId) {
   }
 }
 
-// === 📌 Запрос на отношения (.отн запрос) ===
-bot.hears(/^\.отн запрос$/, async (ctx) => {
+// =============================================================
+// КОНСТАНТЫ И КАТАЛОГИ СИСТЕМЫ ОТНОШЕНИЙ GRIZZLY
+// =============================================================
+
+const RELATION_ACTIONS = [
+  { level: 1, name: 'комплимент', label: 'Сделать комплимент', sparks: 15, exp: 20, cd: 5 * 60 * 1000, emoji: '💬', msg: 'сделал(а) нежный комплимент' },
+  { level: 2, name: 'завтрак', label: 'Приготовить завтрак', sparks: 35, exp: 40, cd: 8 * 60 * 1000, emoji: '🥞', msg: 'приготовил(а) вкусный завтрак в постель для' },
+  { level: 3, name: 'цветы', label: 'Подарить цветы', sparks: 60, exp: 60, cd: 11 * 60 * 1000, emoji: '💐', msg: 'подарил(а) шикарный букет цветов для' },
+  { level: 4, name: 'фильм', label: 'Посмотреть фильм', sparks: 80, exp: 80, cd: 15 * 60 * 1000, emoji: '🎬', msg: 'устроил(а) уютный просмотр фильма с' },
+  { level: 5, name: 'массаж', label: 'Сделать массаж', sparks: 120, exp: 110, cd: 20 * 60 * 1000, emoji: '💆', msg: 'сделал(а) расслабляющий массаж для' },
+  { level: 6, name: 'прогулка', label: 'Пойти на прогулку', sparks: 150, exp: 140, cd: 25 * 60 * 1000, emoji: '✨', msg: 'пошёл(шла) на романтическую прогулку под звёздами с' },
+  { level: 7, name: 'романтика', label: 'Романтический ужин', sparks: 180, exp: 170, cd: 30 * 60 * 1000, emoji: '🕯️', msg: 'устроил(а) ужин при свечах для' },
+  { level: 8, name: 'постель', label: 'Уединиться в постели', sparks: 250, exp: 220, cd: 35 * 60 * 1000, emoji: '🔥', msg: 'страстно уединился(лась) в постели с', canConceive: true },
+  { level: 9, name: 'пикник', label: 'Пикник на природе', sparks: 280, exp: 260, cd: 40 * 60 * 1000, emoji: '🧺', msg: 'организовал(а) пикник на поляне с' },
+  { level: 10, name: 'путешествие', label: 'Отправиться в путешествие', sparks: 350, exp: 320, cd: 50 * 60 * 1000, emoji: '✈️', msg: 'отправился(лась) в захватывающее путешествие с' },
+  { level: 12, name: 'танец', label: 'Медленный танец', sparks: 400, exp: 370, cd: 60 * 60 * 1000, emoji: '💃', msg: 'закружил(а) в медленном танце' },
+  { level: 15, name: 'сюрприз', label: 'Сделать сюрприз', sparks: 500, exp: 450, cd: 75 * 60 * 1000, emoji: '🎉', msg: 'подготовил(а) незабываемый сюрприз для' },
+  { level: 20, name: 'клятва', label: 'Клятва верности', sparks: 750, exp: 600, cd: 90 * 60 * 1000, emoji: '💍', msg: 'поклялся(лась) в вечной любви перед' },
+  { level: 25, name: 'круиз', label: 'Морской круиз', sparks: 1000, exp: 800, cd: 120 * 60 * 1000, emoji: '🚢', msg: 'отправился(лась) в кругосветный круиз с' },
+  { level: 30, name: 'вечность', label: 'Сплетение душ', sparks: 2000, exp: 1500, cd: 180 * 60 * 1000, emoji: '💖', msg: 'соединил(а) свою судьбу навечно с' }
+];
+
+const RELATION_HOUSES = [
+  { level: 1, name: 'Шалаш в лесу', comfort: 10, upgradeCost: 300, icon: '⛺' },
+  { level: 2, name: 'Уютная Студия', comfort: 30, upgradeCost: 1000, icon: '🏢' },
+  { level: 3, name: 'Просторная Квартира', comfort: 70, upgradeCost: 3000, icon: '🏡' },
+  { level: 4, name: 'Загородный Коттедж', comfort: 150, upgradeCost: 8000, icon: '🏠' },
+  { level: 5, name: 'Пентхаус в Небоскрёбе', comfort: 350, upgradeCost: 20000, icon: '🏙️' },
+  { level: 6, name: 'Королевская Вилла Grizzly', comfort: 800, upgradeCost: 50000, icon: '🏰' }
+];
+
+const GIFTS_CATALOG = [
+  { id: 1, name: 'Шоколадка "Алёнка"', price: 500, sparks: 20, icon: '🍫' },
+  { id: 2, name: 'Букет из 101 розы', price: 2500, sparks: 100, icon: '🌹' },
+  { id: 3, name: 'Плюшевый мишка Grizzly', price: 10000, sparks: 400, icon: '🧸' },
+  { id: 4, name: 'Золотое кольцо с сапфиром', price: 50000, sparks: 2000, icon: '💍' },
+  { id: 5, name: 'Бриллиантовое колье', price: 150000, sparks: 6000, icon: '💎' },
+  { id: 6, name: 'Спорткар для двоих', price: 500000, sparks: 20000, icon: '🏎️' }
+];
+
+const PET_EGGS = {
+  'обычное': { price: 500, pool: [{ type: 'Котик', icon: '🐱', rarity: 'Обычный' }, { type: 'Щенок', icon: '🐶', rarity: 'Обычный' }] },
+  'редкое': { price: 1500, pool: [{ type: 'Лисёнок', icon: '🦊', rarity: 'Редкий' }, { type: 'Енот', icon: '🦝', rarity: 'Редкий' }, { type: 'Пандочка', icon: '🐼', rarity: 'Редкий' }] },
+  'легендарное': { price: 5000, pool: [{ type: 'Медвежонок Grizzly', icon: '🐻', rarity: 'Легендарный' }, { type: 'Дракончик', icon: '🐲', rarity: 'Легендарный' }, { type: 'Феникс', icon: '🔥', rarity: 'Легендарный' }] }
+};
+
+function generateProgressBar(current, max, size = 10) {
+  const percent = Math.min(Math.max(current / max, 0), 1);
+  const filled = Math.round(percent * size);
+  const empty = size - filled;
+  return '█'.repeat(filled) + '░'.repeat(empty);
+}
+
+function checkAndDeliverBaby(marriage) {
+  if (marriage?.pregnancy?.isPregnant && marriage.pregnancy.dueAt && new Date() >= new Date(marriage.pregnancy.dueAt)) {
+    const gender = marriage.pregnancy.babyGender || (Math.random() > 0.5 ? 'м' : 'ж');
+    const defaultName = gender === 'м' ? 'Сыночек' : 'Доченька';
+    if (!marriage.children) marriage.children = [];
+    marriage.children.push({
+      name: defaultName,
+      gender: gender,
+      birthDate: new Date(),
+      intellect: 50,
+      happiness: 85,
+      health: 100,
+      discipline: 50,
+      creativity: 50,
+      lastCare: new Date()
+    });
+    marriage.pregnancy.isPregnant = false;
+    marriage.pregnancy.startedAt = null;
+    marriage.pregnancy.dueAt = null;
+    return true;
+  }
+  return false;
+}
+
+// === 👤 Установка пола (.мойпол м/ж) ===
+bot.hears(/^\.мойпол(?:\s+(м|ж))?$/i, async (ctx) => {
   try {
-    if (!ctx.message.reply_to_message) {
-      return ctx.reply('❌ Используйте .отн запрос в ответ на сообщение пользователя.');
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    if (!user) return ctx.reply('❌ Вы не зарегистрированы в боте. Используйте /start');
+
+    const input = ctx.match[1]?.toLowerCase();
+    if (!input) {
+      const current = user.gender === 'м' ? 'Мужской (♂️)' : user.gender === 'ж' ? 'Женский (♀️)' : 'Не указан';
+      return ctx.reply(`👤 <b>Ваш текущий пол:</b> ${current}\n\n💡 <i>Чтобы изменить пол, напишите:</i>\n<code>.мойпол м</code> — мужской (♂️)\n<code>.мойпол ж</code> — женский (♀️)`, { parse_mode: 'HTML' });
+    }
+
+    user.gender = input;
+    await user.save();
+    return ctx.reply(`✅ Ваш пол успешно установлен: <b>${input === 'м' ? 'Мужской (♂️)' : 'Женский (♀️)'}</b>!`, { parse_mode: 'HTML' });
+  } catch (e) {
+    console.error('Ошибка в .мойпол:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 📌 Запрос на отношения (.отн запрос) ===
+bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
+  try {
+    let targetId = null;
+
+    if (ctx.match[1]) {
+      const username = ctx.match[1].slice(1);
+      const targetUser = await User.findOne({ username: new RegExp(`^${username}$`, 'i') });
+      if (!targetUser) {
+        return ctx.reply('❌ Пользователь с таким @username не найден в базе бота.');
+      }
+      targetId = targetUser.telegramId;
+    } else if (ctx.message.reply_to_message) {
+      targetId = ctx.message.reply_to_message.from.id;
+    } else {
+      return ctx.reply('❌ Используйте команду ответом на сообщение пользователя или укажите: <code>.отн запрос @username</code>', { parse_mode: 'HTML' });
     }
 
     const senderId = ctx.from.id;
-    const targetId = ctx.message.reply_to_message.from.id;
 
     // Проверка, если пользователь пытается предложить отношения самому себе
     if (senderId === targetId) {
@@ -3027,6 +3191,66 @@ bot.action(/^decline_(\d+)_(\d+)$/, async (ctx) => {
   }
 });
 
+// === 📌 Текстовое подтверждение запроса на отношения (.отн да / .отн нет) ===
+bot.hears(/^\.отн (да|нет)$/i, async (ctx) => {
+  try {
+    const targetId = ctx.from.id;
+    const answer = ctx.match[1].toLowerCase();
+
+    if (!pendingRequests.has(targetId)) {
+      return ctx.reply('❌ У вас нет активных запросов на отношения.');
+    }
+
+    const senderId = pendingRequests.get(targetId);
+    pendingRequests.delete(targetId);
+
+    const marriageRequest = await Marriage.findOne({
+      userId: senderId,
+      partnerId: targetId,
+      status: 'pending'
+    });
+
+    if (!marriageRequest) {
+      return ctx.reply('⏳ Запрос уже недействителен.');
+    }
+
+    const [senderUser, targetUser] = await Promise.all([
+      User.findOne({ telegramId: senderId }),
+      User.findOne({ telegramId: targetId })
+    ]);
+
+    const senderNick = senderUser?.nickname || `User${senderId}`;
+    const targetNick = targetUser?.nickname || `User${targetId}`;
+
+    if (answer === 'да') {
+      marriageRequest.status = 'accepted';
+      marriageRequest.acceptedAt = new Date();
+      marriageRequest.lastActivity = new Date();
+      marriageRequest.sparks = 100;
+      marriageRequest.level = 1;
+      marriageRequest.exp = 0;
+      marriageRequest.house = { type: 'Шалаш в лесу', level: 1, comfort: 10, safeCookies: 0 };
+      await marriageRequest.save();
+
+      if (senderUser) { senderUser.partner = targetId; await senderUser.save(); }
+      if (targetUser) { targetUser.partner = senderId; await targetUser.save(); }
+
+      ctx.reply(`💖 <a href="tg://user?id=${targetId}">${targetNick}</a> принял(а) предложение <a href="tg://user?id=${senderId}">${senderNick}</a>!\n\n🎉 Поздравляем с началом отношений!\n🔥 Вашей паре начислено 100 стартовых искр!\n\n💡 Напишите <code>.отн я</code> чтобы посмотреть визитку пары.`, { parse_mode: 'HTML' });
+      ctx.telegram.sendMessage(senderId, `💖 <a href="tg://user?id=${targetId}">${targetNick}</a> согласился(лась) на ваши отношения! Поздравляем! 🎉`, { parse_mode: 'HTML' }).catch(() => {});
+    } else {
+      marriageRequest.status = 'divorced';
+      marriageRequest.divorcedAt = new Date();
+      await marriageRequest.save();
+
+      ctx.reply(`💔 <a href="tg://user?id=${targetId}">${targetNick}</a> отклонил(а) предложение <a href="tg://user?id=${senderId}">${senderNick}</a>.`, { parse_mode: 'HTML' });
+      ctx.telegram.sendMessage(senderId, `💔 Ваше предложение было отклонено.`, { parse_mode: 'HTML' }).catch(() => {});
+    }
+  } catch (err) {
+    console.error('Ошибка в .отн да/нет:', err);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
 // === 📌 Расторжение брака (.отн развод) ===
 bot.hears(/^\.отн развод/, async (ctx) => {
   try {
@@ -3082,94 +3306,717 @@ bot.hears(/^\.отн развод/, async (ctx) => {
   }
 });
 
-// === 📌 Профиль отношений (.отн профиль) ===
-bot.hears(/^\.отн профиль$/, async (ctx) => {
+// === 📌 Профиль отношений (.отн я / .отн статус / .отн профиль) ===
+bot.hears(/^\.отн (я|статус|профиль)$/i, async (ctx) => {
   try {
     const userId = ctx.from.id;
-
-    // Находим активный брак
     const marriage = await Marriage.findOne({
-      $or: [{ userId: userId }, { partnerId: userId }],
+      $or: [{ userId }, { partnerId: userId }],
       status: 'accepted'
     });
 
     if (!marriage) {
-      return ctx.reply('❌ Вы не состоите в отношениях.');
+      return ctx.reply('❌ Вы не состоите в отношениях.\n💡 Чтобы предложить отношения: <code>.отн запрос @username</code>', { parse_mode: 'HTML' });
     }
 
-    // Обновляем рейтинг и уровень
-    marriage.relationshipScore = calculateRelationshipScore(marriage);
-    marriage.level = calculateRelationshipLevel(marriage.relationshipScore);
-    
-    // Проверяем достижения
-    await checkAndAddAchievements(marriage);
+    // Проверяем рождение ребенка, если подошел срок
+    const babyBorn = checkAndDeliverBaby(marriage);
+
+    marriage.sparks = marriage.sparks ?? 100;
+    marriage.level = marriage.level ?? 1;
+    marriage.exp = marriage.exp ?? 0;
+    if (!marriage.house || !marriage.house.type) {
+      marriage.house = { type: 'Шалаш в лесу', level: 1, comfort: 10, safeCookies: 0 };
+    }
     await marriage.save();
 
-    // Получаем ссылки на никнеймы с кликабельными ссылками
-    const userNickname = await getNicknameByTelegramId(marriage.userId);
-    const partnerNickname = await getNicknameByTelegramId(marriage.partnerId);
+    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const [userDoc, partnerDoc] = await Promise.all([
+      User.findOne({ telegramId: userId }),
+      User.findOne({ telegramId: partnerId })
+    ]);
 
-    // Вычисляем длительность отношений
-    const relationshipDuration = Math.floor((Date.now() - marriage.acceptedAt.getTime()) / (1000 * 60 * 60 * 24));
-    
-    // Информация о свадьбе
-    const weddingInfo = marriage.weddingDate 
-      ? `\n💍 <b>Свадьба:</b> ${marriage.weddingDate.toLocaleDateString('ru-RU')}\n🎁 <b>Подарков на свадьбе:</b> ${marriage.weddingGiftsTotal} печенек`
-      : '\n💍 <b>Свадьба:</b> Еще не проведена (используйте .отн свадьба)';
+    const userNick = userDoc?.nickname || `User${userId}`;
+    const partnerNick = partnerDoc?.nickname || `User${partnerId}`;
+    const userGender = userDoc?.gender === 'ж' ? '♀️' : userDoc?.gender === 'м' ? '♂️' : '❓';
+    const partnerGender = partnerDoc?.gender === 'ж' ? '♀️' : partnerDoc?.gender === 'м' ? '♂️' : '❓';
 
-    // Условие для вывода информации о пользователе в зависимости от того, кто пишет команду
-    if (userId != marriage.partnerId) {
-      return ctx.reply(`
-💖 <b>Ваш профиль отношений</b>
+    const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
+    const daysTogether = Math.max(1, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
+    const maxExp = marriage.level * 250;
+    const pBar = generateProgressBar(marriage.exp, maxExp, 10);
+    const kidsCount = marriage.children?.length || 0;
+    const petsCount = marriage.pets?.length || 0;
+    const giftsCount = marriage.giftsList?.length || 0;
 
-👤 <b>Ваш ник:</b> ${userNickname}
-👫 <b>Партнёр:</b> ${partnerNickname}
-📅 <b>Дата начала:</b> ${marriage.acceptedAt.toLocaleDateString('ru-RU')}
-⏰ <b>Длительность:</b> ${relationshipDuration} дней${weddingInfo}
-
-📊 <b>Рейтинг:</b> ${marriage.relationshipScore}
-⭐ <b>Уровень отношений:</b> ${marriage.level}/10
-
-🏦 <b>Совместный банк:</b> ${marriage.jointBank} печенек
-
-🎁 <b>Подарки:</b>
-• Отправлено: ${marriage.giftsSent}
-• Получено: ${marriage.giftsReceived}
-• Общая стоимость: ${marriage.totalGiftValue} печенек
-
-🏆 <b>Достижения (${marriage.achievements.length}):</b>
-${marriage.achievements.length > 0 ? marriage.achievements.map(ach => `• ${ach}`).join('\n') : '• Пока нет достижений'}
-
-💡 <i>Используйте .отн помощь для просмотра всех команд</i>
-      `, { parse_mode: 'HTML' });
-    } else {
-      return ctx.reply(`
-💖 <b>Ваш профиль отношений</b>
-
-👤 <b>Ваш ник:</b> ${partnerNickname}
-👫 <b>Партнёр:</b> ${userNickname}
-📅 <b>Дата начала:</b> ${marriage.acceptedAt.toLocaleDateString('ru-RU')}
-⏰ <b>Длительность:</b> ${relationshipDuration} дней${weddingInfo}
-
-📊 <b>Рейтинг:</b> ${marriage.relationshipScore}
-⭐ <b>Уровень отношений:</b> ${marriage.level}/10
-
-🏦 <b>Совместный банк:</b> ${marriage.jointBank} печенек
-
-🎁 <b>Подарки:</b>
-• Отправлено: ${marriage.giftsReceived}
-• Получено: ${marriage.giftsSent}
-• Общая стоимость: ${marriage.totalGiftValue} печенек
-
-🏆 <b>Достижения (${marriage.achievements.length}):</b>
-${marriage.achievements.length > 0 ? marriage.achievements.map(ach => `• ${ach}`).join('\n') : '• Пока нет достижений'}
-
-💡 <i>Используйте .отн помощь для просмотра всех команд</i>
-      `, { parse_mode: 'HTML' });
+    let pregText = '';
+    if (marriage.pregnancy?.isPregnant) {
+      const leftHours = Math.max(0, Math.ceil((new Date(marriage.pregnancy.dueAt).getTime() - Date.now()) / (1000 * 60 * 60)));
+      pregText = `\n🤰 <b>Ожидание малыша:</b> роды через ~${leftHours} ч. (.узи)`;
     }
+
+    const babyNotice = babyBorn ? '\n🎉 <b>Радостная весть:</b> У вас родился малыш! Загляните в меню: <code>.рб</code>\n' : '';
+
+    const profileText = `
+💖 <b>ПРОФИЛЬ ВАШЕЙ ПАРЫ</b>
+${babyNotice}
+💑 <b>Пара:</b> <a href="tg://user?id=${userId}">${userNick}</a> (${userGender}) ❤️ <a href="tg://user?id=${partnerId}">${partnerNick}</a> (${partnerGender})
+💍 <b>Свидетельство:</b> №${marriage._id.toString().slice(-6).toUpperCase()}
+⏳ <b>Вместе:</b> ${daysTogether} дн. (с ${new Date(startDate).toLocaleDateString('ru-RU')})
+
+⭐ <b>Уровень отношений:</b> ${marriage.level}/30 [${pBar}]
+✨ <b>Опыт:</b> ${marriage.exp} / ${maxExp} XP
+🔥 <b>Баланс искр:</b> ${utils.sp(marriage.sparks)} искр
+
+🏠 <b>Дом:</b> ${marriage.house.type} (Уют: ${marriage.house.comfort})
+💰 <b>Сейф в доме:</b> ${utils.sp(marriage.house.safeCookies || 0)} 🍪
+👶 <b>Детей в семье:</b> ${kidsCount}${pregText}
+🐾 <b>Питомцев:</b> ${petsCount}
+🎁 <b>Подарков в коллекции:</b> ${giftsCount} шт.
+💎 <b>Премиум-пара:</b> ${marriage.isPremium ? 'Да (активен 👑)' : 'Нет'}
+
+💡 <i>Действия: .отн действия | Дом: .отн дом | Дети: .рб | Питомцы: .отн пт</i>
+`;
+
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('✨ Действия', 'rel_menu_actions'), Markup.button.callback('🏠 Дом пары', 'rel_menu_house')],
+      [Markup.button.callback('👶 Дети (.рб)', 'rel_menu_kids'), Markup.button.callback('🐾 Питомцы', 'rel_menu_pets')],
+      [Markup.button.callback('🎁 Подарки', 'rel_menu_gifts'), Markup.button.callback('🔥 Баланс искр', 'rel_menu_sparks')]
+    ]);
+
+    return ctx.reply(profileText, { parse_mode: 'HTML', ...keyboard });
   } catch (error) {
     console.error('Ошибка при получении профиля отношений:', error);
     ctx.reply('❌ Произошла ошибка при получении профиля отношений.');
+  }
+});
+
+// === ✨ Список действий отношений (.отн действия) ===
+bot.hears(/^\.отн действия$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    let userCd = null;
+    if (marriage.actionCooldowns && typeof marriage.actionCooldowns.get === 'function') {
+      userCd = marriage.actionCooldowns.get(String(userId));
+    } else if (marriage.actionCooldowns) {
+      userCd = marriage.actionCooldowns[String(userId)];
+    }
+
+    let cdText = '✅ Действия готовы к использованию!';
+    if (userCd && new Date() < new Date(userCd)) {
+      const leftSec = Math.ceil((new Date(userCd).getTime() - Date.now()) / 1000);
+      const m = Math.floor(leftSec / 60);
+      const s = leftSec % 60;
+      cdText = `⏳ Перезарядка: ещё ${m}м ${s}с`;
+    }
+
+    let list = '<b>🔄 РОМАНТИЧЕСКИЕ ДЕЙСТВИЯ ПАРЫ:</b>\n\n';
+    list += `⏱️ <b>Статус отката:</b> ${cdText}\n\n`;
+
+    for (const act of RELATION_ACTIONS) {
+      const isUnlocked = (marriage.level || 1) >= act.level;
+      const statusIcon = isUnlocked ? '✅' : '🔒';
+      const cdMin = Math.round(act.cd / 60000);
+      list += `[${act.level}] ${statusIcon} • <b>${act.label}</b> | 🔥 +${act.sparks} | ⏱️ ${cdMin}м\n`;
+    }
+
+    list += `\n💡 <i>Чтобы выполнить действие, напишите:</i>\n<code>.отн &lt;действие&gt;</code> (например: <code>.отн комплимент</code>, <code>.отн завтрак</code>, <code>.отн цветы</code>)`;
+
+    return ctx.reply(list, { parse_mode: 'HTML' });
+  } catch (e) {
+    console.error('Ошибка в .отн действия:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🎭 Выполнение действия отношений (.отн <действие>) ===
+bot.hears(/^\.отн\s+(комплимент|завтрак|цветы|фильм|массаж|прогулка|романтика|постель|пикник|путешествие|танец|сюрприз|клятва|круиз|вечность)$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const actionName = ctx.match[1].toLowerCase();
+
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    const act = RELATION_ACTIONS.find(a => a.name === actionName);
+    if (!act) return ctx.reply('❌ Такое действие не найдено.');
+
+    if ((marriage.level || 1) < act.level) {
+      return ctx.reply(`🔒 Действие «<b>${act.label}</b>» откроется на <b>${act.level}</b> уровне отношений! (Ваш уровень: ${marriage.level || 1})`, { parse_mode: 'HTML' });
+    }
+
+    let userCd = null;
+    if (marriage.actionCooldowns && typeof marriage.actionCooldowns.get === 'function') {
+      userCd = marriage.actionCooldowns.get(String(userId));
+    } else if (marriage.actionCooldowns) {
+      userCd = marriage.actionCooldowns[String(userId)];
+    }
+
+    if (userCd && new Date() < new Date(userCd)) {
+      const leftSec = Math.ceil((new Date(userCd).getTime() - Date.now()) / 1000);
+      const m = Math.floor(leftSec / 60);
+      const s = leftSec % 60;
+      return ctx.reply(`⏳ Действие на перезарядке! Подождите ещё <b>${m}м ${s}с</b>.`, { parse_mode: 'HTML' });
+    }
+
+    // Применяем откат
+    const cooldownDuration = marriage.isPremium ? Math.round(act.cd * 0.7) : act.cd;
+    if (!marriage.actionCooldowns) marriage.actionCooldowns = new Map();
+    if (typeof marriage.actionCooldowns.set === 'function') {
+      marriage.actionCooldowns.set(String(userId), new Date(Date.now() + cooldownDuration));
+    } else {
+      marriage.actionCooldowns[String(userId)] = new Date(Date.now() + cooldownDuration);
+    }
+
+    // Начисляем искры и опыт
+    marriage.sparks = (marriage.sparks || 0) + act.sparks;
+    marriage.exp = (marriage.exp || 0) + act.exp;
+    marriage.lastActivity = new Date();
+
+    // Проверка повышения уровня
+    let levelUpNotice = '';
+    const maxExp = marriage.level * 250;
+    if (marriage.exp >= maxExp && marriage.level < 30) {
+      marriage.level += 1;
+      marriage.exp = marriage.exp - maxExp;
+      const bonusSparks = marriage.level * 50;
+      marriage.sparks += bonusSparks;
+      levelUpNotice = `\n\n🎉 <b>LEVEL UP!</b> Уровень вашей пары повышен до <b>${marriage.level}</b>!\n🔥 Бонус за уровень: +${bonusSparks} искр!`;
+    }
+
+    // Проверка зачатия для действия постель
+    let conceptionNotice = '';
+    if (act.canConceive && (!marriage.pregnancy || !marriage.pregnancy.isPregnant)) {
+      if (Math.random() < 0.3) {
+        if (!marriage.pregnancy) marriage.pregnancy = {};
+        marriage.pregnancy.isPregnant = true;
+        marriage.pregnancy.startedAt = new Date();
+        marriage.pregnancy.dueAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+        marriage.pregnancy.babyGender = Math.random() > 0.5 ? 'м' : 'ж';
+        marriage.pregnancy.motherId = userId;
+        conceptionNotice = `\n\n🤰 <b>Чудо любви!</b> Кажется, эта страстная ночь принесла плоды... Тест показал две полоски! 👶 Используйте <code>.узи</code>, чтобы узнать подробности!`;
+      }
+    }
+
+    await marriage.save();
+
+    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const [userDoc, partnerDoc] = await Promise.all([
+      User.findOne({ telegramId: userId }),
+      User.findOne({ telegramId: partnerId })
+    ]);
+
+    const userNick = userDoc?.nickname || `User${userId}`;
+    const partnerNick = partnerDoc?.nickname || `User${partnerId}`;
+
+    const replyMsg = `${act.emoji} | <a href="tg://user?id=${userId}">${userNick}</a> ${act.msg} <a href="tg://user?id=${partnerId}">${partnerNick}</a>!\n\n🔥 +${act.sparks} искр | ✨ +${act.exp} XP${levelUpNotice}${conceptionNotice}`;
+
+    return ctx.reply(replyMsg, { parse_mode: 'HTML' });
+  } catch (e) {
+    console.error('Ошибка в действии .отн:', e);
+    ctx.reply('❌ Произошла ошибка при выполнении действия.');
+  }
+});
+
+// Отдельная команда .постель как шорткат
+bot.hears(/^\.постель$/i, async (ctx) => {
+  ctx.message.text = '.отн постель';
+  return bot.handleUpdate(ctx.update);
+});
+
+// === 🔥 Искры отношений (.отн искры / .отн искры купить <кол-во>) ===
+bot.hears(/^\.отн искры(?:\s+купить\s+(\d+))?$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    const buyAmount = ctx.match[1] ? parseInt(ctx.match[1], 10) : null;
+
+    if (!buyAmount) {
+      marriage.sparks = marriage.sparks ?? 100;
+      return ctx.reply(`
+┏ 🔥 <b>МАГАЗИН И БАЛАНС ИСКР</b> 🔥 ┓
+
+💰 <b>Текущий баланс искр пары:</b> ${utils.sp(marriage.sparks)} 🔥
+⭐ <b>Уровень отношений:</b> ${marriage.level}/30
+
+💡 <b>Курс обмена:</b> 1 искра = 10 печенек 🍪
+Для покупки искр напишите:
+<code>.отн искры купить &lt;количество&gt;</code>
+<i>(например: <code>.отн искры купить 100</code> обойдется в 1.000 печенек)</i>
+`, { parse_mode: 'HTML' });
+    }
+
+    if (buyAmount < 1 || buyAmount > 100000) {
+      return ctx.reply('❌ Укажите количество от 1 до 100.000 искр.');
+    }
+
+    const cost = buyAmount * 10;
+    const user = await User.findOne({ telegramId: userId });
+    if (!user || user.cookies < cost) {
+      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: <b>${utils.sp(cost)}</b> 🍪, у вас: <b>${utils.sp(user?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
+    }
+
+    user.cookies -= cost;
+    marriage.sparks = (marriage.sparks || 0) + buyAmount;
+
+    await Promise.all([user.save(), marriage.save()]);
+
+    return ctx.reply(`✅ Вы успешно обменяли <b>${utils.sp(cost)}</b> 🍪 на <b>+${utils.sp(buyAmount)}</b> 🔥 искр!\n🔥 Баланс искр пары: <b>${utils.sp(marriage.sparks)}</b>`, { parse_mode: 'HTML' });
+  } catch (e) {
+    console.error('Ошибка в .отн искры:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🏠 Дом пары (.отн дом / .отн дом улучшить / .отн дом сейф ...) ===
+bot.hears(/^\.отн дом(?:\s+(улучшить|сейф(?:\s+(положить|снять)\s+(\d+))?))?$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    if (!marriage.house || !marriage.house.type) {
+      marriage.house = { type: 'Шалаш в лесу', level: 1, comfort: 10, safeCookies: 0 };
+    }
+
+    const sub = ctx.match[1]?.toLowerCase();
+
+    // 1. Улучшение дома
+    if (sub === 'улучшить') {
+      const currentLvl = marriage.house.level || 1;
+      const currentHouse = RELATION_HOUSES.find(h => h.level === currentLvl);
+      const nextHouse = RELATION_HOUSES.find(h => h.level === currentLvl + 1);
+
+      if (!nextHouse) {
+        return ctx.reply('🏰 Ваш дом уже достиг максимального королевского уровня!');
+      }
+
+      if ((marriage.sparks || 0) < currentHouse.upgradeCost) {
+        return ctx.reply(`❌ Для улучшения дома требуется <b>${utils.sp(currentHouse.upgradeCost)}</b> 🔥 искр.\nУ вас в наличии: <b>${utils.sp(marriage.sparks || 0)}</b> 🔥.\n💡 Купите искры: <code>.отн искры купить</code>`, { parse_mode: 'HTML' });
+      }
+
+      marriage.sparks -= currentHouse.upgradeCost;
+      marriage.house.level = nextHouse.level;
+      marriage.house.type = nextHouse.name;
+      marriage.house.comfort = nextHouse.comfort;
+      await marriage.save();
+
+      return ctx.reply(`🎉 <b>Поздравляем с новосельем!</b>\n${nextHouse.icon} Теперь ваше жилье: <b>${nextHouse.name}</b>!\n✨ Уровень уюта вырос до: <b>${nextHouse.comfort}</b>`, { parse_mode: 'HTML' });
+    }
+
+    // 2. Сейф в доме
+    if (sub && sub.startsWith('сейф')) {
+      const parts = ctx.message.text.split(/\s+/);
+      const action = parts[3]?.toLowerCase();
+      const amount = parseInt(parts[4], 10);
+
+      if (!action || isNaN(amount) || amount <= 0) {
+        return ctx.reply(`
+💰 <b>Семейный сейф в доме:</b> ${utils.sp(marriage.house.safeCookies || 0)} 🍪
+
+💡 <i>Команды сейфа:</i>
+<code>.отн дом сейф положить &lt;сумма&gt;</code>
+<code>.отн дом сейф снять &lt;сумма&gt;</code>
+`, { parse_mode: 'HTML' });
+      }
+
+      const user = await User.findOne({ telegramId: userId });
+
+      if (action === 'положить') {
+        if (!user || user.cookies < amount) {
+          return ctx.reply(`❌ У вас недостаточно печенек на руках. Баланс: ${utils.sp(user?.cookies || 0)} 🍪`);
+        }
+        user.cookies -= amount;
+        marriage.house.safeCookies = (marriage.house.safeCookies || 0) + amount;
+        await Promise.all([user.save(), marriage.save()]);
+        return ctx.reply(`✅ Вы положили <b>${utils.sp(amount)}</b> 🍪 в семейный сейф!\n💰 Баланс сейфа: <b>${utils.sp(marriage.house.safeCookies)}</b> 🍪`, { parse_mode: 'HTML' });
+      } else if (action === 'снять') {
+        if ((marriage.house.safeCookies || 0) < amount) {
+          return ctx.reply(`❌ В сейфе недостаточно печенек. Баланс сейфа: ${utils.sp(marriage.house.safeCookies || 0)} 🍪`);
+        }
+        marriage.house.safeCookies -= amount;
+        user.cookies += amount;
+        await Promise.all([user.save(), marriage.save()]);
+        return ctx.reply(`✅ Вы забрали <b>${utils.sp(amount)}</b> 🍪 из семейного сейфа!\n💰 Баланс сейфа: <b>${utils.sp(marriage.house.safeCookies)}</b> 🍪`, { parse_mode: 'HTML' });
+      }
+    }
+
+    // 3. Просмотр дома
+    const currentLvl = marriage.house.level || 1;
+    const currentHouse = RELATION_HOUSES.find(h => h.level === currentLvl) || RELATION_HOUSES[0];
+    const nextHouse = RELATION_HOUSES.find(h => h.level === currentLvl + 1);
+
+    const upgradeText = nextHouse
+      ? `\n⬆️ <b>Следующее жилье:</b> ${nextHouse.icon} ${nextHouse.name} (Стоимость: ${utils.sp(currentHouse.upgradeCost)} 🔥)\n💡 <i>Для улучшения введите:</i> <code>.отн дом улучшить</code>`
+      : '\n👑 <i>У вас максимальное жилье!</i>';
+
+    return ctx.reply(`
+${currentHouse.icon} <b>ОБЩИЙ ДОМ ПАРЫ</b>
+
+🏡 <b>Тип жилья:</b> ${marriage.house.type} (${currentLvl}/6 ур.)
+✨ <b>Уровень уюта:</b> ${marriage.house.comfort}
+💰 <b>Семейный сейф:</b> ${utils.sp(marriage.house.safeCookies || 0)} 🍪
+${upgradeText}
+
+💡 <i>Команды сейфа: .отн дом сейф положить/снять &lt;сумма&gt;</i>
+`, { parse_mode: 'HTML' });
+
+  } catch (e) {
+    console.error('Ошибка в .отн дом:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🎁 Магазин подарков (.отн подарки) ===
+bot.hears(/^\.отн подарки$/i, async (ctx) => {
+  try {
+    let text = '🎁 <b>РОМАНТИЧЕСКИЙ МАГАЗИН ПОДАРКОВ</b> 🎁\n\n';
+    text += 'Порадуйте любимого человека подарком в профиль пары:\n\n';
+    for (const g of GIFTS_CATALOG) {
+      text += `[${g.id}] ${g.icon} • <b>${g.name}</b>\n`;
+      text += `     💰 Цена: ${utils.sp(g.price)} 🍪 | 🔥 Даёт: +${utils.sp(g.sparks)} искр\n`;
+    }
+    text += '\n💡 <i>Чтобы подарить, напишите:</i>\n<code>.отн подарить &lt;номер 1-6&gt;</code> (например: <code>.отн подарить 2</code>)';
+    return ctx.reply(text, { parse_mode: 'HTML' });
+  } catch (e) {
+    console.error('Ошибка в .отн подарки:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 💝 Подарить романтический подарок (.отн подарить <id>) ===
+bot.hears(/^\.отн подарить\s+(\d+)$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const giftId = parseInt(ctx.match[1], 10);
+    const gift = GIFTS_CATALOG.find(g => g.id === giftId);
+    if (!gift) return ctx.reply('❌ Неверный номер подарка. Посмотрите список: <code>.отн подарки</code>', { parse_mode: 'HTML' });
+
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    const user = await User.findOne({ telegramId: userId });
+    if (!user || user.cookies < gift.price) {
+      return ctx.reply(`❌ У вас не хватает печенек. Подарок стоит: <b>${utils.sp(gift.price)}</b> 🍪, у вас: <b>${utils.sp(user?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
+    }
+
+    const partnerId = marriage.userId === userId ? marriage.partnerId : marriage.userId;
+    const partner = await User.findOne({ telegramId: partnerId });
+
+    user.cookies -= gift.price;
+    marriage.sparks = (marriage.sparks || 0) + gift.sparks;
+    if (!marriage.giftsList) marriage.giftsList = [];
+    marriage.giftsList.push({
+      name: gift.name,
+      icon: gift.icon,
+      fromId: userId,
+      date: new Date()
+    });
+    marriage.totalGiftValue = (marriage.totalGiftValue || 0) + gift.price;
+
+    await Promise.all([user.save(), marriage.save()]);
+
+    const userNick = user.nickname || `User${userId}`;
+    const partnerNick = partner?.nickname || `User${partnerId}`;
+
+    return ctx.reply(`
+💝 <b>РОМАНТИЧЕСКИЙ ПОДАРОК!</b>
+
+${gift.icon} <a href="tg://user?id=${userId}">${userNick}</a> преподносит восхитительный подарок для <a href="tg://user?id=${partnerId}">${partnerNick}</a>!
+🎁 Подарок: <b>${gift.name}</b>
+🔥 Начислено паре: <b>+${utils.sp(gift.sparks)}</b> искр!
+`, { parse_mode: 'HTML' });
+
+  } catch (e) {
+    console.error('Ошибка в .отн подарить:', e);
+    ctx.reply('❌ Произошла ошибка при отправке подарка.');
+  }
+});
+
+// === 🤰 Беременность и УЗИ (.узи) ===
+bot.hears(/^\.(узи|беременность)$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    // Проверяем роды
+    const babyBorn = checkAndDeliverBaby(marriage);
+    if (babyBorn) {
+      await marriage.save();
+      return ctx.reply('🎉 <b>Поздравляем!</b> Пока вы шли на УЗИ, время подошло — у вас родился малыш! Загляните в меню: <code>.рб</code>', { parse_mode: 'HTML' });
+    }
+
+    if (!marriage.pregnancy || !marriage.pregnancy.isPregnant) {
+      return ctx.reply('🤰 Ваша пара сейчас не ждет ребенка.\n💡 Чтобы зачать малыша, уединитесь в постели: <code>.постель</code>', { parse_mode: 'HTML' });
+    }
+
+    const dueTime = new Date(marriage.pregnancy.dueAt).getTime();
+    const leftMs = Math.max(0, dueTime - Date.now());
+    const leftHours = Math.floor(leftMs / (1000 * 60 * 60));
+    const leftMinutes = Math.floor((leftMs % (1000 * 60 * 60)) / (1000 * 60));
+    const genderText = marriage.pregnancy.babyGender === 'м' ? 'Мальчик 👦' : 'Девочка 👧';
+
+    return ctx.reply(`
+🏥 <b>РЕЗУЛЬТАТЫ УЗИ ОБСЛЕДОВАНИЯ</b>
+
+🤰 <b>Статус:</b> Беременность протекает отлично!
+⏳ <b>До родов осталось:</b> ~${leftHours} ч. ${leftMinutes} мин.
+👶 <b>Пол будущего малыша:</b> <b>${genderText}</b>
+
+✨ <i>Готовьтесь к пополнению в семье! Когда малыш родится, вы сможете заботиться о нем через команду .рб</i>
+`, { parse_mode: 'HTML' });
+
+  } catch (e) {
+    console.error('Ошибка в .узи:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 👶 Дети и воспитание (.рб) ===
+bot.hears(/^\.рб(?:\s+(покормить|поиграть|имя)(?:\s+(\d+))?(?:\s+(.+))?)?$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    checkAndDeliverBaby(marriage);
+
+    if (!marriage.children || marriage.children.length === 0) {
+      return ctx.reply('👶 В вашей семье пока нет детей.\n💡 Чтобы зачать ребенка, используйте <code>.постель</code> и пройдите <code>.узи</code>!', { parse_mode: 'HTML' });
+    }
+
+    const sub = ctx.match[1]?.toLowerCase();
+    const childIndex = ctx.match[2] ? parseInt(ctx.match[2], 10) - 1 : 0;
+    const child = marriage.children[childIndex] || marriage.children[0];
+
+    // 1. Покормить ребенка
+    if (sub === 'покормить') {
+      child.health = Math.min(100, (child.health || 80) + 15);
+      child.happiness = Math.min(100, (child.happiness || 80) + 10);
+      child.lastCare = new Date();
+      await marriage.save();
+      return ctx.reply(`🍼 Вы покормили малыша <b>${child.name}</b> вкусной кашей!\n❤️ Здоровье: ${child.health}/100 | 😊 Счастье: ${child.happiness}/100`, { parse_mode: 'HTML' });
+    }
+
+    // 2. Поиграть с ребенком
+    if (sub === 'поиграть') {
+      child.happiness = Math.min(100, (child.happiness || 80) + 20);
+      child.intellect = Math.min(100, (child.intellect || 50) + 5);
+      child.lastCare = new Date();
+      await marriage.save();
+      return ctx.reply(`🧸 Вы весело поиграли в кубики с <b>${child.name}</b>!\n😊 Счастье: ${child.happiness}/100 | 🧠 Интеллект: ${child.intellect}/100`, { parse_mode: 'HTML' });
+    }
+
+    // 3. Переименовать ребенка
+    if (sub === 'имя') {
+      const newName = ctx.match[3]?.trim();
+      if (!newName || newName.length < 2 || newName.length > 20) {
+        return ctx.reply('❌ Укажите имя от 2 до 20 символов: <code>.рб имя [номер] [Новое Имя]</code>', { parse_mode: 'HTML' });
+      }
+      child.name = newName;
+      await marriage.save();
+      return ctx.reply(`✅ Вы дали малышу новое прекрасное имя: <b>${newName}</b>!`, { parse_mode: 'HTML' });
+    }
+
+    // 4. Меню детей
+    let listText = '👶 <b>ДЕТИ В ВАШЕЙ СЕМЬЕ:</b>\n\n';
+    marriage.children.forEach((c, idx) => {
+      const genderIcon = c.gender === 'м' ? '👦' : '👧';
+      const ageDays = Math.max(1, Math.floor((Date.now() - new Date(c.birthDate).getTime()) / (1000 * 60 * 60 * 24)));
+      listText += `[${idx + 1}] ${genderIcon} <b>${c.name}</b> (Возраст: ${ageDays} дн.)\n`;
+      listText += `     ❤️ Здоровье: ${c.health || 100}/100 [${generateProgressBar(c.health || 100, 100, 8)}]\n`;
+      listText += `     😊 Счастье: ${c.happiness || 80}/100 [${generateProgressBar(c.happiness || 80, 100, 8)}]\n`;
+      listText += `     🧠 Интеллект: ${c.intellect || 50}/100 [${generateProgressBar(c.intellect || 50, 100, 8)}]\n\n`;
+    });
+
+    listText += `💡 <i>Команды заботы:</i>\n<code>.рб покормить [номер]</code>\n<code>.рб поиграть [номер]</code>\n<code>.рб имя [номер] [Новое Имя]</code>`;
+
+    return ctx.reply(listText, { parse_mode: 'HTML' });
+
+  } catch (e) {
+    console.error('Ошибка в .рб:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🐾 Питомцы пары (.отн пт) ===
+bot.hears(/^\.отн пт(?:\s+(яйцо(?:\s+(обычное|редкое|легендарное))?|покормить|поиграть)(?:\s+(\d+))?)?$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const marriage = await Marriage.findOne({
+      $or: [{ userId }, { partnerId: userId }],
+      status: 'accepted'
+    });
+    if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
+
+    const sub = ctx.match[1]?.toLowerCase();
+
+    // 1. Покупка яйца питомца
+    if (sub && sub.startsWith('яйцо')) {
+      const eggType = ctx.match[2]?.toLowerCase() || 'обычное';
+      const eggInfo = PET_EGGS[eggType];
+      if (!eggInfo) {
+        return ctx.reply('❌ Доступные типы яиц: <code>обычное</code>, <code>редкое</code>, <code>легендарное</code>.\nПример: <code>.отн пт яйцо обычное</code>', { parse_mode: 'HTML' });
+      }
+
+      if ((marriage.sparks || 0) < eggInfo.price) {
+        return ctx.reply(`❌ Для покупки этого яйца нужно <b>${utils.sp(eggInfo.price)}</b> 🔥 искр. У вас: <b>${utils.sp(marriage.sparks || 0)}</b> 🔥.\n💡 Купите искры: <code>.отн искры купить</code>`, { parse_mode: 'HTML' });
+      }
+
+      if ((marriage.pets?.length || 0) >= 5) {
+        return ctx.reply('❌ В вашей семье уже максимальное количество питомцев (5/5).');
+      }
+
+      // Вылупление питомца
+      marriage.sparks -= eggInfo.price;
+      const randomPet = eggInfo.pool[Math.floor(Math.random() * eggInfo.pool.length)];
+      if (!marriage.pets) marriage.pets = [];
+
+      marriage.pets.push({
+        name: randomPet.type,
+        type: randomPet.type,
+        rarity: randomPet.rarity,
+        level: 1,
+        exp: 0,
+        hunger: 100,
+        happiness: 100,
+        lastFed: new Date()
+      });
+
+      await marriage.save();
+
+      return ctx.reply(`
+🥚 <b>ТРЕСК В ИНКУБАТОРЕ...</b> 🐣
+
+🎉 Из ${eggType}го яйца только что вылупился <b>${randomPet.icon} ${randomPet.type}</b>!
+🌟 Редкость: <b>${randomPet.rarity}</b>
+🐾 Поздравляем с новым членом семьи! Заботьтесь о нем через <code>.отн пт</code>
+`, { parse_mode: 'HTML' });
+    }
+
+    // 2. Покормить питомца
+    if (sub === 'покормить') {
+      const pIndex = ctx.match[3] ? parseInt(ctx.match[3], 10) - 1 : 0;
+      const pet = marriage.pets?.[pIndex] || marriage.pets?.[0];
+      if (!pet) return ctx.reply('❌ У вас пока нет питомцев. Купите яйцо: <code>.отн пт яйцо обычное</code>', { parse_mode: 'HTML' });
+
+      pet.hunger = Math.min(100, (pet.hunger || 80) + 30);
+      pet.happiness = Math.min(100, (pet.happiness || 80) + 15);
+      pet.exp = (pet.exp || 0) + 25;
+      if (pet.exp >= pet.level * 100) {
+        pet.level += 1;
+        pet.exp = 0;
+      }
+      pet.lastFed = new Date();
+      await marriage.save();
+      return ctx.reply(`🍖 Вы вкусно покормили питомца <b>${pet.name}</b>!\nСытость: ${pet.hunger}/100 | Уровень: ${pet.level}`, { parse_mode: 'HTML' });
+    }
+
+    // 3. Поиграть с питомцем
+    if (sub === 'поиграть') {
+      const pIndex = ctx.match[3] ? parseInt(ctx.match[3], 10) - 1 : 0;
+      const pet = marriage.pets?.[pIndex] || marriage.pets?.[0];
+      if (!pet) return ctx.reply('❌ У вас пока нет питомцев. Купите яйцо: <code>.отн пт яйцо обычное</code>', { parse_mode: 'HTML' });
+
+      pet.happiness = Math.min(100, (pet.happiness || 80) + 30);
+      pet.hunger = Math.max(0, (pet.hunger || 100) - 15);
+      pet.exp = (pet.exp || 0) + 35;
+      if (pet.exp >= pet.level * 100) {
+        pet.level += 1;
+        pet.exp = 0;
+      }
+      await marriage.save();
+      return ctx.reply(`🎾 Вы весело поиграли с питомцем <b>${pet.name}</b>!\nСчастье: ${pet.happiness}/100 | Уровень: ${pet.level}`, { parse_mode: 'HTML' });
+    }
+
+    // 4. Меню питомцев
+    if (!marriage.pets || marriage.pets.length === 0) {
+      return ctx.reply(`
+🐾 <b>МЕНЮ ПИТОМЦЕВ ПАРЫ</b>
+
+<i>У вашей пары пока нет питомцев. Приобретите яйцо в инкубаторе:</i>
+
+🥚 <b>Обычное яйцо:</b> 500 🔥 (Котик, Щенок)
+🔮 <b>Редкое яйцо:</b> 1.500 🔥 (Лисёнок, Енот, Панда)
+👑 <b>Легендарное яйцо:</b> 5.000 🔥 (Медвежонок Grizzly, Дракон, Феникс)
+
+💡 <i>Для покупки напишите:</i>
+<code>.отн пт яйцо обычное</code>
+<code>.отн пт яйцо редкое</code>
+<code>.отн пт яйцо легендарное</code>
+`, { parse_mode: 'HTML' });
+    }
+
+    let pText = '🐾 <b>ПИТОМЦЫ ВАШЕЙ ПАРЫ:</b>\n\n';
+    marriage.pets.forEach((pet, i) => {
+      pText += `[${i + 1}] <b>${pet.name}</b> (${pet.rarity}) — Ур. ${pet.level}\n`;
+      pText += `     🍖 Сытость: ${pet.hunger || 100}/100 [${generateProgressBar(pet.hunger || 100, 100, 8)}]\n`;
+      pText += `     🎾 Счастье: ${pet.happiness || 100}/100 [${generateProgressBar(pet.happiness || 100, 100, 8)}]\n\n`;
+    });
+
+    pText += `💡 <i>Команды заботы:</i>\n<code>.отн пт покормить [номер]</code>\n<code>.отн пт поиграть [номер]</code>\n<code>.отн пт яйцо &lt;тип&gt;</code> — купить новое яйцо`;
+
+    return ctx.reply(pText, { parse_mode: 'HTML' });
+
+  } catch (e) {
+    console.error('Ошибка в .отн пт:', e);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🔘 Callback-кнопки меню отношений ===
+bot.action(/^rel_menu_(actions|house|kids|pets|gifts|sparks)$/, async (ctx) => {
+  try {
+    const action = ctx.match[1];
+    await ctx.answerCbQuery();
+    if (action === 'actions') {
+      ctx.message = { text: '.отн действия', chat: ctx.chat, from: ctx.from };
+      return bot.handleUpdate(ctx.update);
+    } else if (action === 'house') {
+      ctx.message = { text: '.отн дом', chat: ctx.chat, from: ctx.from };
+      return bot.handleUpdate(ctx.update);
+    } else if (action === 'kids') {
+      ctx.message = { text: '.рб', chat: ctx.chat, from: ctx.from };
+      return bot.handleUpdate(ctx.update);
+    } else if (action === 'pets') {
+      ctx.message = { text: '.отн пт', chat: ctx.chat, from: ctx.from };
+      return bot.handleUpdate(ctx.update);
+    } else if (action === 'gifts') {
+      ctx.message = { text: '.отн подарки', chat: ctx.chat, from: ctx.from };
+      return bot.handleUpdate(ctx.update);
+    } else if (action === 'sparks') {
+      ctx.message = { text: '.отн искры', chat: ctx.chat, from: ctx.from };
+      return bot.handleUpdate(ctx.update);
+    }
+  } catch (e) {
+    console.error('Ошибка в rel_menu action:', e.message);
   }
 });
 
