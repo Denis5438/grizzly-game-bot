@@ -147,6 +147,10 @@ const UserSchema = new Mongoose.Schema({
   gender: { type: String, enum: ['м', 'ж', null], default: null }
 });
 
+// ⚡ ИНДЕКСЫ ДЛЯ ОПТИМИЗАЦИИ ПОИСКА И ТОПОВ
+UserSchema.index({ username: 1 });
+UserSchema.index({ cookies: -1 });
+
 // Create the User model
 const User = Mongoose.model('User', UserSchema);
 
@@ -315,18 +319,22 @@ bot.hears(/^\.аз банк$/i, async (ctx) => {
 });
 bot.hears(/^\.аз банк ([сСпП]) ([^]+|вс[её])?$/i, async (ctx) => {
   try {
-    const user = ctx.state.user; // ⚡ Используем кэшированного пользователя
-    const operation = ctx.match[1].toLowerCase();
-    let amount = ctx.match[2];
+    const user = ctx.state.user || await User.findOne({ telegramId: ctx.from.id });
+    if (!user) return ctx.reply('Вы не зарегистрированы в боте.');
 
-    if (/^вс[её]?$/.test(amount)) {
-      if (operation === 'с') {
-        amount = user.bankCookies;
-      } else if (operation === 'п') {
-        amount = user.cookies;
-      }
+    const operation = ctx.match[1].toLowerCase();
+    let rawAmount = ctx.match[2];
+
+    if (!rawAmount || !rawAmount.trim()) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n💡 • Для снятия/пополнения введите: .аз банк с/п <сумма>`, { parse_mode: 'Markdown' });
+    }
+
+    let amount;
+    if (/^вс[её]?$/i.test(rawAmount.trim())) {
+      const fresh = await User.findOne({ telegramId: ctx.from.id });
+      amount = operation === 'с' ? fresh?.bankCookies : fresh?.cookies;
     } else {
-      amount = amount.replace(/(\.|\,|к|k|м|m)/ig, (match) => {
+      let cleaned = rawAmount.replace(/(\.|\,|к|k|м|m)/ig, (match) => {
         const replacements = {
           '.': '',
           ',': '',
@@ -337,126 +345,175 @@ bot.hears(/^\.аз банк ([сСпП]) ([^]+|вс[её])?$/i, async (ctx) => {
         };
         return replacements[match.toLowerCase()] || match;
       });
+      amount = parseInt(cleaned, 10);
     }
 
     if (isNaN(amount) || amount <= 0) {
       return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n💡 • Для снятия/пополнения введите: .аз банк с/п <сумма>`, { parse_mode: 'Markdown' });
     }
 
-    amount = parseInt(amount);
     const reply = (message) => ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n${message}`, { parse_mode: 'Markdown' });
 
     if (operation === 'с') {
-      if (user.bankCookies < amount) {
-        return reply(`👺 • У вас недостатачно средств!\n🏦 В банке: ${utils.sp(user.bankCookies)}`);
+      const updatedUser = await User.findOneAndUpdate(
+        { telegramId: ctx.from.id, bankCookies: { $gte: amount } },
+        { $inc: { bankCookies: -amount, cookies: amount } },
+        { new: true }
+      );
+      if (!updatedUser) {
+        const freshUser = await User.findOne({ telegramId: ctx.from.id });
+        return reply(`👺 • У вас недостаточно средств!\n🏦 В банке: ${utils.sp(freshUser?.bankCookies || 0)}`);
       }
-      user.bankCookies -= amount;
-      user.cookies += amount;
+      return reply(`✅ Вы сняли ${utils.sp(amount)} с банковского счета\n🏦 В банке: ${utils.sp(updatedUser.bankCookies)}\n🍪 Баланс: ${utils.sp(updatedUser.cookies)}`);
     } else if (operation === 'п') {
-      if (user.cookies < amount) {
-        return reply(`👺 • У вас недостатачно средств!\n🍪 Баланс: ${utils.sp(user.cookies)}`);
+      const updatedUser = await User.findOneAndUpdate(
+        { telegramId: ctx.from.id, cookies: { $gte: amount } },
+        { $inc: { cookies: -amount, bankCookies: amount } },
+        { new: true }
+      );
+      if (!updatedUser) {
+        const freshUser = await User.findOne({ telegramId: ctx.from.id });
+        return reply(`👺 • У вас недостаточно средств!\n🍪 Баланс: ${utils.sp(freshUser?.cookies || 0)}`);
       }
-      user.bankCookies += amount;
-      user.cookies -= amount;
+      return reply(`✅ Вы пополнили банковский счет на ${utils.sp(amount)}\n🏦 В банке: ${utils.sp(updatedUser.bankCookies)}\n🍪 Баланс: ${utils.sp(updatedUser.cookies)}`);
     }
-
-    await user.save();
-    reply(`✅ ${operation === 'с' ? 'Вы сняли' : 'Вы пополнили'} ${utils.sp(amount)} ${operation === 'с' ? 'с банковского счета' : 'банковский счет на'}\n🏦 В банке: ${utils.sp(user.bankCookies)}\n🍪 Баланс: ${utils.sp(user.cookies)}`);
   } catch (error) {
-    console.log("Ошибка:", error);
+    console.error("Ошибка в .аз банк:", error);
   }
 });
 
 bot.hears(/^\.аз перевод$/i, async (ctx) => {
-  const user = ctx.state.user; // ⚡ Используем кэшированного пользователя
-  return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🍪 • Используйте .аз перевод <участник> <сумма>`, { parse_mode: 'Markdown' });
+  const user = ctx.state.user || await User.findOne({ telegramId: ctx.from.id });
+  return ctx.reply(`[${user ? user.nickname : 'Игрок'}](tg://user?id=${ctx.from.id}),\n🍪 • Используйте .аз перевод <участник> <сумма>`, { parse_mode: 'Markdown' });
 });
 bot.hears(/^\.аз перевод\s*(.+)? ([^]+|вс[её])?$/i, async (ctx) => {
   try {
-    const user = ctx.state.user; // ⚡ Используем кэшированного пользователя
+    const user = ctx.state.user || await User.findOne({ telegramId: ctx.from.id });
 
     if (!user) {
-      return ctx.reply('Вы не зарегистрирован в боте');
+      return ctx.reply('Вы не зарегистрированы в боте');
     }
 
-    const recipientUsername = ctx.message.text.match(/@\w+/)?.[0]?.slice(1);
-    let cookiesToTransfer = ctx.match[2];
-
-    cookiesToTransfer = cookiesToTransfer.replace(/(\.|\,|к|k|м|m)/ig, match => {
-      const replacements = {
-        '.': '',
-        ',': '',
-        'к': '000',
-        'k': '000',
-        'м': '000000',
-        'm': '000000',
-      };
-      return replacements[match.toLowerCase()] || match;
-    });
-
-    if (/^вс[её]?$/.test(cookiesToTransfer)) {
-      cookiesToTransfer = user.bankCookies;
-    }
-
-    if (!cookiesToTransfer) {
+    let rawCookies = ctx.match[2];
+    if (!rawCookies || !rawCookies.trim()) {
       return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🍪 • Используйте .аз перевод <участник> <сумма>`, { parse_mode: 'Markdown' });
     }
 
-    const transferLimit = 3;
-    const commissionPercentage = 0.05;
-    const recipientUser = recipientUsername ? await User.findOne({ username: recipientUsername }) : await User.findOne({ telegramId: ctx.message.reply_to_message?.from.id });
-
-
-    const now = new Date();
-    if (!user.lastTransferTime || !(user.lastTransferTime instanceof Date) || now.getTime() - user.lastTransferTime.getTime() > 24 * 60 * 60 * 1000) {
-      user.transfersToday = 0;
+    let cookiesToTransfer;
+    if (/^вс[её]?$/i.test(rawCookies.trim())) {
+      const freshUser = await User.findOne({ telegramId: user.telegramId });
+      cookiesToTransfer = freshUser ? freshUser.bankCookies : 0;
+    } else {
+      let cleaned = rawCookies.replace(/(\.|\,|к|k|м|m)/ig, match => {
+        const replacements = {
+          '.': '',
+          ',': '',
+          'к': '000',
+          'k': '000',
+          'м': '000000',
+          'm': '000000',
+        };
+        return replacements[match.toLowerCase()] || match;
+      });
+      cookiesToTransfer = parseInt(cleaned, 10);
     }
+
+    if (isNaN(cookiesToTransfer) || cookiesToTransfer < 50000) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🔄 • Недостаточно средств на банковском счету или минимальная сумма для перевода составляет 50.000`, { parse_mode: 'Markdown' });
+    }
+
+    const recipientUsername = ctx.message.text.match(/@\w+/)?.[0]?.slice(1);
+    const recipientUser = recipientUsername ? await User.findOne({ username: new RegExp('^' + recipientUsername + '$', 'i') }) : await User.findOne({ telegramId: ctx.message.reply_to_message?.from?.id });
 
     if (!recipientUser || !recipientUser.telegramId) {
-      return ctx.reply('Пользователь, которого вы хотите перевести, не зарегистрирован в боте.');
-    }
-
-    if (user.transfersToday >= transferLimit) {
-      const remainingTime = new Date(user.lastTransferTime.getTime() + 24 * 60 * 60 * 1000 - now.getTime());
-      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🔄 • Вы достигли максимального количества переводов, ограничение будет снято через ${remainingTime.getUTCHours() > 0 ? `${remainingTime.getUTCHours()}ч. ` : ''}${remainingTime.getUTCMinutes()}м. ${remainingTime.getUTCSeconds()}с.`);
+      return ctx.reply('Пользователь, которому вы хотите перевести, не зарегистрирован в боте.');
     }
 
     if (recipientUser.username === user.username || recipientUser.telegramId === user.telegramId) {
       return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🔄 • Невозможно перевести печеньки самому себе`, { parse_mode: 'Markdown' });
     }
 
-    if (user.bankCookies < 0 || cookiesToTransfer < 50000) {
-      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🔄 • Недостаточно средств на банковском счету или минимальная сумма для перевода составляет 50.000`, { parse_mode: 'Markdown' });
-    }
+    const transferLimit = 3;
+    const commissionPercentage = 0.05;
+    const now = new Date();
+    const cutoffDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     const commission = Math.ceil(cookiesToTransfer * commissionPercentage);
     const transferAmount = cookiesToTransfer - commission;
 
-    if (user.bankCookies < cookiesToTransfer) {
-      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n👺 • У вас недостаточно средств! Баланс: ${utils.sp(user.bankCookies)}`);
+    // ⚡ Атомарная проверка лимита переводов и баланса
+    // Попытка 1: Начало нового 24-часового периода (первый перевод за сутки)
+    let updatedSender = await User.findOneAndUpdate(
+      {
+        telegramId: user.telegramId,
+        bankCookies: { $gte: cookiesToTransfer },
+        $or: [
+          { lastTransferTime: { $exists: false } },
+          { lastTransferTime: null },
+          { lastTransferTime: { $lt: cutoffDate } }
+        ]
+      },
+      {
+        $inc: { bankCookies: -cookiesToTransfer },
+        $set: { transfersToday: 1, lastTransferTime: now }
+      },
+      { new: true }
+    );
+
+    // Попытка 2: В рамках текущих 24 часов (лимит строго < transferLimit)
+    if (!updatedSender) {
+      updatedSender = await User.findOneAndUpdate(
+        {
+          telegramId: user.telegramId,
+          bankCookies: { $gte: cookiesToTransfer },
+          transfersToday: { $lt: transferLimit },
+          lastTransferTime: { $gte: cutoffDate }
+        },
+        {
+          $inc: { bankCookies: -cookiesToTransfer, transfersToday: 1 },
+          $set: { lastTransferTime: now }
+        },
+        { new: true }
+      );
     }
 
-    user.bankCookies -= cookiesToTransfer;
-    recipientUser.bankCookies += transferAmount;
+    if (!updatedSender) {
+      const current = await User.findOne({ telegramId: user.telegramId });
+      if ((current?.bankCookies || 0) < cookiesToTransfer) {
+        return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n👺 • У вас недостаточно средств! Баланс: ${utils.sp(current?.bankCookies || 0)}`);
+      }
+      const lastTime = current?.lastTransferTime ? new Date(current.lastTransferTime).getTime() : 0;
+      const remainingMs = Math.max(0, (lastTime + 24 * 60 * 60 * 1000) - now.getTime());
+      const remainingTime = new Date(remainingMs);
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🔄 • Вы достигли максимального количества переводов (${transferLimit}/день), ограничение будет снято через ${remainingTime.getUTCHours() > 0 ? `${remainingTime.getUTCHours()}ч. ` : ''}${remainingTime.getUTCMinutes()}м. ${remainingTime.getUTCSeconds()}с.`);
+    }
 
-    user.transfersToday++;
-    user.lastTransferTime = new Date();
-
-    await user.save();
-    await recipientUser.save();
+    try {
+      await User.findOneAndUpdate(
+        { telegramId: recipientUser.telegramId },
+        { $inc: { bankCookies: transferAmount } }
+      );
+    } catch (creditErr) {
+      // Откат списания у отправителя в случае сбоя
+      await User.findOneAndUpdate(
+        { telegramId: user.telegramId },
+        { $inc: { bankCookies: cookiesToTransfer, transfersToday: -1 } }
+      );
+      return ctx.reply('❌ Ошибка при зачислении средств получателю. Перевод отменен, средства возвращены на ваш счет.');
+    }
 
     const MAX_RECIPIENT_NAME_LENGTH = 14;
-
-    let recipientName = recipientUser.firstName;
-    if (recipientName.length > MAX_RECIPIENT_NAME_LENGTH) {
-      recipientName = recipientName.substring(0, MAX_RECIPIENT_NAME_LENGTH - 3) + '';
-    }
-    const transfersLeft = transferLimit - user.transfersToday;
-    const transferMessage = `[${user.nickname}](tg://user?id=${ctx.from.id}),\n🔄 • Перевод на сумму ${utils.sp(transferAmount)} выполнен. Получатель: [${recipientName}](tg://user?id=${recipientUser.telegramId})\n💰 • Комиссия банка (${commissionPercentage * 100}%): ${utils.sp(commission)}\n🗄 • Переводов осталось: ${transfersLeft}`;
+    let rawRecipientName = (recipientUser.firstName || recipientUser.nickname || 'Игрок').replace(/[\[\]]/g, '');
+    let recipientName = rawRecipientName.length > MAX_RECIPIENT_NAME_LENGTH
+      ? rawRecipientName.substring(0, MAX_RECIPIENT_NAME_LENGTH - 3) + '...'
+      : rawRecipientName;
+    const senderNick = (user.nickname || user.firstName || 'Игрок').replace(/[\[\]]/g, '');
+    const transfersLeft = Math.max(0, transferLimit - updatedSender.transfersToday);
+    const transferMessage = `[${senderNick}](tg://user?id=${ctx.from.id}),\n🔄 • Перевод на сумму ${utils.sp(transferAmount)} выполнен. Получатель: [${recipientName}](tg://user?id=${recipientUser.telegramId})\n💰 • Комиссия банка (${commissionPercentage * 100}%): ${utils.sp(commission)}\n🗄 • Переводов осталось: ${transfersLeft}`;
 
     ctx.reply(transferMessage, { parse_mode: 'Markdown' });
   } catch (error) {
-    console.log("Ошибка:", error);
+    console.error("Ошибка в .аз перевод:", error);
   }
 });
 
@@ -776,65 +833,75 @@ bot.hears(/^\.аз рулетка\s?$/i, async (ctx) => {
   return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n💡 • Используйте .аз рулетка <цвет> <ставка>`, { parse_mode: 'Markdown' });
 });
 bot.hears(/^\.аз рулетка ([ч|к|з])\s?([^]+|вс[её])?$/i, async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
+  try {
+    const user = await User.findOne({ telegramId: ctx.from.id });
 
-  if (!user) {
-    return ctx.reply('Вы не зарегистрирован в боте');
-  }
-
-  let [, color, bet] = ctx.match;
-  const colors = {
-    'ч': 'чёрное',
-    'к': 'красное',
-    'з': 'зелёное',
-  };
-
-  const betReplacer = {
-    '.': '',
-    ',': '',
-    'к': '000',
-    'k': '000',
-    'м': '000000',
-    'm': '000000',
-  };
-
-  bet = bet.replace(/[.,кKмM]/g, match => betReplacer[match] || match);
-
-  bet = /^вс[её]?$/.test(bet) ? user.cookies : parseInt(bet);
-
-  if (!colors[color]) {
-    return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Вы ввели неверный цвет, доступные цвета: ч, к, з`, { parse_mode: 'Markdown' });
-  }
-
-  if (bet < 5) {
-    return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Минимальная ставка от 5 печенек.`, { parse_mode: 'Markdown' });
-  }
-
-  if (user.cookies < bet) {
-    const cookiesDiff = bet - user.cookies;
-    return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • У вас не хватает ${utils.sp(cookiesDiff)} печенек!\n🍪 • Печенек: ${utils.sp(user.cookies)}`, { parse_mode: 'Markdown' });
-  }
-
-  const rouletteResults = ['ч', 'ч', 'ч', 'ч', 'ч', 'к', 'к', 'к', 'к', 'к', 'з'];
-  const result = rouletteResults[Math.floor(Math.random() * rouletteResults.length)];
-  const resultColor = colors[result];
-  // Правильная логика расчета выигрыша
-  if (color === result) {
-    if (result === 'з') {
-      user.cookies += +bet * 11; // Зеленый дает x11
-    } else {
-      user.cookies += +bet * 2; // Красный/черный дает x2
+    if (!user) {
+      return ctx.reply('Вы не зарегистрирован в боте');
     }
-  } else {
-    user.cookies -= +bet; // Проигрыш
+
+    let [, color, bet] = ctx.match;
+    if (color) color = color.replace(/\|/g, '').toLowerCase();
+
+    const colors = {
+      'ч': 'чёрное',
+      'к': 'красное',
+      'з': 'зелёное',
+    };
+
+    if (!colors[color]) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Вы ввели неверный цвет, доступные цвета: ч, к, з`, { parse_mode: 'Markdown' });
+    }
+
+    if (!bet || !bet.trim()) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n💡 • Используйте .аз рулетка <цвет> <ставка>`, { parse_mode: 'Markdown' });
+    }
+
+    const betReplacer = {
+      '.': '',
+      ',': '',
+      'к': '000',
+      'k': '000',
+      'м': '000000',
+      'm': '000000',
+    };
+
+    bet = bet.replace(/([.,кkмm])/gi, match => betReplacer[match.toLowerCase()] || match);
+    bet = /^вс[её]?$/i.test(bet.trim()) ? user.cookies : parseInt(bet, 10);
+
+    if (isNaN(bet) || bet < 5) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Минимальная ставка от 5 печенек.`, { parse_mode: 'Markdown' });
+    }
+
+    const rouletteResults = ['ч', 'ч', 'ч', 'ч', 'ч', 'к', 'к', 'к', 'к', 'к', 'з'];
+    const result = rouletteResults[Math.floor(Math.random() * rouletteResults.length)];
+    const resultColor = colors[result];
+    const isWin = (color === result);
+    const betMultiplier = isWin ? (result === 'з' ? 11 : 2) : 0;
+    const cookieDelta = isWin ? (result === 'з' ? bet * 11 : bet * 2) : -bet;
+
+    // ⚡ Атомарная операция с проверкой баланса для предотвращения race condition
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: ctx.from.id, cookies: { $gte: bet } },
+      { $inc: { cookies: cookieDelta } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      const freshUser = await User.findOne({ telegramId: ctx.from.id });
+      const currentCookies = freshUser?.cookies || 0;
+      const cookiesDiff = bet - currentCookies;
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • У вас не хватает ${utils.sp(cookiesDiff)} печенек!\n🍪 • Печенек: ${utils.sp(currentCookies)}`, { parse_mode: 'Markdown' });
+    }
+
+    const emoji = (result === 'ч') ? '🖤' : (result === 'к') ? '❤️' : '💚';
+    const resultMessage = isWin ? '➕ • Вы получаете' : '➖ • Вы теряете';
+    const betMessage = isWin ? bet * betMultiplier : bet;
+
+    ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n${emoji} • На рулетке выпало: ${resultColor}\n${resultMessage}: ${utils.sp(betMessage)} печенек\n🍪 • Печенек: ${utils.sp(updatedUser.cookies)}`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Ошибка в .аз рулетка:', error);
   }
-  await user.save();
-
-  const emoji = (result === 'ч') ? '🖤' : (result === 'к') ? '❤️' : '💚';
-  const resultMessage = (betMultiplier === 2) ? '➕ • Вы получаете' : '➖ • Вы теряете';
-  const betMessage = (betMultiplier === 2) ? bet * 2 : bet;
-
-  ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n${emoji} • На рулетке выпало: ${resultColor}\n${resultMessage}: ${utils.sp(betMessage)} печенек\n🍪 • Печенек: ${utils.sp(user.cookies)}`, { parse_mode: 'Markdown' });
 });
 
 //команда для проверку пинга
@@ -902,7 +969,8 @@ function countLines(text) {
 }
 
 bot.hears(/^\.цитата\s*([\s\S]*)?/i, async (ctx) => {
-  let user = await User.findOne({ telegramId: ctx.from.id });
+  try {
+    let user = await User.findOne({ telegramId: ctx.from.id });
   let quoteText;
   if (ctx.message.reply_to_message) {
     if (ctx.message.reply_to_message.text) {
@@ -1029,7 +1097,9 @@ bot.hears(/^\.цитата\s*([\s\S]*)?/i, async (ctx) => {
   const image = canvas.toBuffer('image/png');
   const caption = `[${user.nickname}](tg://user?id=${ctx.from.id}),\nВоть`;
   await ctx.replyWithPhoto({ source: image }, { caption, parse_mode: 'Markdown' });
-
+  } catch (error) {
+    console.error("Ошибка в .цитата:", error);
+  }
 });
 
 
@@ -1108,9 +1178,10 @@ if (userProfilePhotos.total_count > 0) {
 }); */
 
 bot.hears(/^\.сдб\s*(@\w+)?$/i, async (ctx) => {
-  const mentionedUsername = ctx.match[1];
-  let userProfilePhotos, userId, replyName;
-  const user = await User.findOne({ telegramId: ctx.from.id });
+  try {
+    const mentionedUsername = ctx.match[1];
+    let userProfilePhotos, userId, replyName;
+    const user = await User.findOne({ telegramId: ctx.from.id });
 
   if (ctx.message.reply_to_message) {
     userId = ctx.message.reply_to_message.from.id;
@@ -1205,7 +1276,10 @@ bot.hears(/^\.сдб\s*(@\w+)?$/i, async (ctx) => {
   const image = canvas.toBuffer('image/png');
   const caption = `[${user.nickname}](tg://user?id=${user.id}),\nВоть`;
   await ctx.replyWithPhoto({ source: image }, { caption, parse_mode: 'Markdown' });
-}).catch(error => console.log("Error:", error));
+  } catch (error) {
+    console.error("Ошибка в .сдб:", error);
+  }
+});
 
 // ==========================================
 // ИНТЕГРАЦИЯ GOOGLE GEMINI AI (.gpt / .ai)
@@ -1216,7 +1290,11 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const dialoggptSchema = new Mongoose.Schema({
   userId: { type: String, required: true, index: true },
   messages: Array,
+  createdAt: { type: Date, default: Date.now }
 });
+
+// ⚡ TTL-индекс для автоматической очистки старых диалогов через 7 дней (604800 сек)
+dialoggptSchema.index({ createdAt: 1 }, { expireAfterSeconds: 604800 });
 
 const Dialoggpt = Mongoose.model('Dialoggpt', dialoggptSchema);
 
@@ -1451,40 +1529,6 @@ function splitTextIntoChunks(text, chunkSize) {
   return chunks;
 }
 
-bot.action(/^cancel:(\d+)$/i, async (ctx) => {
-  const userId = ctx.from.id;
-  const message_id = ctx.update.callback_query.message.message_id;
-  const userIdFromCallback = parseInt(ctx.match[1], 10);
-
-  // Проверяем, что владелец запроса совпадает с userId
-  const dialog = await Dialoggpt.findOne({ userId: userId });
-
-  if (dialog) {
-    if (userId === userIdFromCallback) {
-      dialog.messages.pop(); // Удаляем последний ответ
-      dialog.messages.pop(); // Удаляем последний вопрос пользователя
-      await dialog.save();
-
-      // Отправляем сообщение об отмене запроса
-      const user1 = await User.findOne({ telegramId: userId });
-      const cancelMessage = `[${user1.nickname}](tg://user?id=${userId}),\nВаш запрос был отменен.`;
-
-      // Используем метод editMessageText для редактирования сообщения
-      await ctx.telegram.editMessageText(ctx.chat.id, message_id, null, cancelMessage, {
-        parse_mode: 'Markdown'
-      });
-    } else {
-      // Если владелец запроса не совпадает с userId, отправляем уведомление об ошибке
-      const errorMessage = 'Вы не можете отменить этот запрос, так как он не ваш.';
-      await ctx.answerCbQuery(errorMessage);
-    }
-  } else {
-    // Если владелец запроса не совпадает с userId, отправляем уведомление об ошибке
-    const errorMessage = 'У вас нет активный диалог с GPT.';
-    await ctx.answerCbQuery(errorMessage);
-  }
-});
-
 
 /*function splitTextIntoChunks(text, chunkSize) {
   const chunks = [];
@@ -1599,38 +1643,51 @@ bot.hears(/^.викторина (\d+)$/i, async (ctx) => {
 }); 
 */
 
-bot.hears('.аз бонус', async (ctx) => {
-  const currentTime = Date.now();
-  let user = await User.findOne({ telegramId: ctx.from.id });
+bot.hears(/^[.!\/]?аз бонус\s*$/i, async (ctx) => {
+  try {
+    const cutoffDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // ⚡ Атомарная проверка кулдауна и начисление бонуса
+    const updatedUser = await User.findOneAndUpdate(
+      {
+        telegramId: ctx.from.id,
+        $or: [
+          { lastBonusTime: { $exists: false } },
+          { lastBonusTime: null },
+          { lastBonusTime: { $lte: cutoffDate } }
+        ]
+      },
+      {
+        $inc: { cookies: 50000 },
+        $set: { lastBonusTime: new Date() }
+      },
+      { new: true }
+    );
 
-  if (!user) {
-    // Обработка ошибки, если пользователь не найден
-    ctx.reply('Вы не зарегистрирован в боте.');
-    return;
+    if (!updatedUser) {
+      const user = await User.findOne({ telegramId: ctx.from.id });
+      if (!user) {
+        return ctx.reply('Вы не зарегистрированы в боте.');
+      }
+      const lastBonusMs = user.lastBonusTime ? new Date(user.lastBonusTime).getTime() : 0;
+      const timeLeftMs = Math.max(0, (lastBonusMs + 24 * 60 * 60 * 1000) - Date.now());
+      const timeLeft = new Date(timeLeftMs);
+      const safeNick = (user.nickname || user.firstName || 'Игрок').replace(/[\[\]]/g, '');
+      return ctx.reply(`[${safeNick}](tg://user?id=${ctx.from.id}),\n🎁 • Следующий бонус будет доступен через ${timeLeft.getUTCHours() > 0 ? `${timeLeft.getUTCHours()}ч.` : ''}${timeLeft.getUTCMinutes()}м.${timeLeft.getUTCSeconds()}с.`, { parse_mode: 'Markdown' });
+    }
+
+    const safeNick = (updatedUser.nickname || updatedUser.firstName || 'Игрок').replace(/[\[\]]/g, '');
+    ctx.reply(`[${safeNick}](tg://user?id=${ctx.from.id}),\n🎁 • Вы получили бонус в размере 50.000\n🍪 • Баланс: ${utils.sp(updatedUser.cookies)}`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error("Ошибка в .аз бонус:", error);
   }
-
-  // Проверка времени до следующего бонуса
-  if (user.lastBonusTime.getTime() + 24 * 60 * 60 * 1000 > currentTime) {
-    const timeLeft = new Date(user.lastBonusTime.getTime() + 24 * 60 * 60 * 1000 - currentTime);
-    ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🎁 • Следующий бонус будет доступен через ${timeLeft.getUTCHours() > 0 ? `${timeLeft.getUTCHours()}ч.` : ''}${timeLeft.getUTCMinutes()}м.${timeLeft.getUTCSeconds()}с.`, { parse_mode: 'Markdown' });
-
-    // Сохранение обновленной даты последнего бонуса
-    await User.updateOne({ telegramId: ctx.from.id }, { lastBonusTime: user.lastBonusTime });
-    return;
-  }
-  // Выдача бонуса
-  user.cookies += 50000;
-  user.lastBonusTime = currentTime;
-  await user.save();
-  ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n🎁 • Вы получили бонус в размере 50.000\n🍪 • Баланс: ${utils.sp(user.cookies)}`, { parse_mode: 'Markdown' });
-}).catch(error => console.log("Ошибка:", error));
+});
 
 bot.hears('.аз топ', async (ctx) => {
-  let user = await User.findOne({ telegramId: ctx.from.id });
-  if (!user) {
-    return ctx.reply('Вы не зарегистрирован в боте');
-  }
   try {
+    let user = await User.findOne({ telegramId: ctx.from.id });
+    if (!user) {
+      return ctx.reply('Вы не зарегистрирован в боте');
+    }
     // Получаем список пользователей по убыванию печенек (с ограничением до 10)
     const users = await User.find().sort('-cookies').limit(10);
 
@@ -1644,16 +1701,17 @@ bot.hears('.аз топ', async (ctx) => {
     // Отправляем сообщение пользователю
     ctx.reply(message, { parse_mode: 'Markdown' });
   } catch (err) {
-    console.error(err);
+    console.error("Ошибка при получении топа игроков:", err);
     ctx.reply('Произошла ошибка при получении топа игроков');
   }
-}).catch(error => console.log("Ошибка:", error));
+});
 
 
 //рп команды
 
 bot.on('text', async (ctx, next) => {
-  const { text } = ctx.message;
+  try {
+    const { text } = ctx.message;
   const reply = ctx.message.reply_to_message;
   const commands = {
     "поцеловать": {
@@ -1803,7 +1861,10 @@ bot.on('text', async (ctx, next) => {
     // ctx.reply(`Чтобы использовать эту команду, пожалуйста, ответьте на сообщение пользователя или укажите @username, на которого вы хотите использовать ${name}`);
     return;
   }
-}).catch(error => console.log(error));
+  } catch (error) {
+    console.error("Ошибка в обработчике встроенных RP команд:", error);
+  }
+});
 
 //создание рп команды
 
@@ -1816,21 +1877,54 @@ const RpCommandSchema = new Mongoose.Schema({
   emoji: { type: String }
 });
 
+// ⚡ Индексы для быстрого поиска команд
+RpCommandSchema.index({ creatorId: 1, name: 1 });
+RpCommandSchema.index({ name: 1 });
+
 // Модель команды
 const RpCommand = Mongoose.model('RpCommand', RpCommandSchema);
 
+// ⚡ Кэш RP-команд в Map в оперативной памяти (ликвидация сканирования базы на каждое сообщение)
+let rpCommandsMap = null; // Map<Number, Array<RpCommand>> по creatorId
+let rpCommandsCache = null; // Все команды
+
+async function getCachedRpCommands() {
+  if (rpCommandsMap !== null) {
+    return rpCommandsCache;
+  }
+  const commands = await RpCommand.find({}).lean();
+  const map = new Map();
+  for (const cmd of commands) {
+    const list = map.get(cmd.creatorId) || [];
+    list.push(cmd);
+    map.set(cmd.creatorId, list);
+  }
+  rpCommandsCache = commands;
+  rpCommandsMap = map;
+  return rpCommandsCache;
+}
+
+function getRpCommandsByCreator(creatorId) {
+  if (!rpCommandsMap) return [];
+  return rpCommandsMap.get(creatorId) || [];
+}
+
+function invalidateRpCommandsCache() {
+  rpCommandsMap = null;
+  rpCommandsCache = null;
+}
 
 // Обработчик текстовых сообщений
 bot.on('text', async (ctx, next) => {
-  const { text } = ctx.message;
-  const reply = ctx.message.reply_to_message;
-  const user = await User.findOne({ telegramId: ctx.from.id });
+  try {
+    const { text } = ctx.message;
+    const reply = ctx.message.reply_to_message;
+    const user = ctx.state.user || await User.findOne({ telegramId: ctx.from.id });
 
-  // Получение списка команд из базы данных
-  const commands = await RpCommand.find({});
+    // ⚡ Инициализация кэша команд (при необходимости)
+    await getCachedRpCommands();
 
-
-  const lines = text.trim().split('\n');
+    const lines = text.trim().split('\n');
   const command = lines[0].toLowerCase();
 
   if (command.startsWith('.срп')) {
@@ -1880,11 +1974,12 @@ bot.on('text', async (ctx, next) => {
 
     // Сохранение команды в базе данных
     await newCommand.save();
+    invalidateRpCommandsCache();
 
     ctx.reply(`✅ Новая рп-комманда добавлена`);
   } else if (command === '.мрп') {
     // Показ списка созданных рп-команд
-    const userCommands = commands.filter(cmd => cmd.creatorId === ctx.from.id);
+    const userCommands = getRpCommandsByCreator(ctx.from.id);
     if (userCommands.length === 0) {
       ctx.reply('✖️ Вы ещё не создавали рп-команд');
       return;
@@ -1918,13 +2013,17 @@ bot.on('text', async (ctx, next) => {
 
     // Удаление команды из базы данных
     await RpCommand.deleteOne({ _id: userCommand._id });
+    invalidateRpCommandsCache();
 
     ctx.reply(`✅ Рп команда успешно удалена.`);
 
   } else {
 
     // Обработка других текстовых сообщений
-    const cmd = commands.find(cmd => command.startsWith(cmd.name.toLowerCase()) && cmd.creatorId === user.telegramId);
+    if (!user) return next();
+    // ⚡ O(1) поиск только среди команд создателя текущей команды
+    const userCommands = getRpCommandsByCreator(user.telegramId);
+    const cmd = userCommands.find(cmd => command.startsWith(cmd.name.toLowerCase()));
     if (!cmd) return next();
 
     const { name, response, response2, emoji } = cmd;
@@ -1933,17 +2032,18 @@ bot.on('text', async (ctx, next) => {
     const mentionRegex = /@\w+/g;
     const mentions = text.match(mentionRegex);
 
+    const getSafeNick = (u) => ((u?.nickname || u?.firstName || 'Пользователь') + '').replace(/[\[\]]/g, '');
+
     if (mentions && mentions.length > 0) {
       // Обрабатываем каждое упоминание
       for (const mention of mentions) {
         const username = mention.substring(1); // Удаляем "@" из имени пользователя
-        // Далее вы можете найти пользователя по его username и использовать его идентификатор в обработчике команды
-        const mentionedUser = await User.findOne({ username });
+        const mentionedUser = await User.findOne({ username: new RegExp(`^${username}$`, 'i') });
         if (mentionedUser) {
-          // Проверка, является ли отправитель команды создателем команды
-
-          let nickname = user.nickname.length > 14 ? user.nickname.substring(0, 14) + '' : user.nickname;
-          let nickname2 = mentionedUser.nickname.length > 14 ? mentionedUser.nickname.substring(0, 14) + '' : mentionedUser.nickname;
+          const rawNick1 = getSafeNick(user);
+          const rawNick2 = getSafeNick(mentionedUser);
+          let nickname = rawNick1.length > 14 ? rawNick1.substring(0, 14) : rawNick1;
+          let nickname2 = rawNick2.length > 14 ? rawNick2.substring(0, 14) : rawNick2;
           let formattedResponse = response
             .replace(/%a/g, `[${nickname}](tg://user?id=${user.telegramId})`)
             .replace(/%s/g, `[${nickname2}](tg://user?id=${mentionedUser.telegramId})`);
@@ -1961,21 +2061,16 @@ bot.on('text', async (ctx, next) => {
     if (reply) {
       const { from, message_id } = reply;
 
-      // Проверка, является ли отправитель команды создателем команды
-      const user = await User.findOne({ telegramId: ctx.from.id });
-      if (!user) {
-        ctx.reply(`Вы не зарегистрированы в боте`);
-        return;
-      }
-
       const user2 = await User.findOne({ telegramId: ctx.message.reply_to_message.from.id });
       if (!user2) {
-        ctx.reply(`${ctx.message.reply_to_message.from.first_name} не зарегистрирован в боте`);
+        ctx.reply(`${ctx.message.reply_to_message.from.first_name || 'Пользователь'} не зарегистрирован в боте`);
         return;
       }
 
-      let nickname = user.nickname.length > 14 ? user.nickname.substring(0, 14) + '' : user.nickname;
-      let nickname2 = user2.nickname.length > 14 ? user2.nickname.substring(0, 14) + '' : user2.nickname;
+      const rawNick1 = getSafeNick(user);
+      const rawNick2 = getSafeNick(user2);
+      let nickname = rawNick1.length > 14 ? rawNick1.substring(0, 14) : rawNick1;
+      let nickname2 = rawNick2.length > 14 ? rawNick2.substring(0, 14) : rawNick2;
 
       let formattedResponse = response
         .replace(/%a/g, `[${nickname}](tg://user?id=${user.telegramId})`)
@@ -1988,162 +2083,189 @@ bot.on('text', async (ctx, next) => {
         reply_to_message_id: message_id
       });
     } else if (!mentions && !reply) {
-      //ctx.reply(`Чтобы использовать эту команду, пожалуйста, ответьте на сообщение пользователя или укажите @username, на которого вы хотите использовать ${name}`);
       return;
     }
   }
-}).catch(error => console.log(error));
+  } catch (error) {
+    console.error("Ошибка в обработчике кастомных RP команд:", error);
+  }
+});
 
 
 // Команда резервного копирования удалена в целях безопасности
 //команды мут/бан
 bot.hears(/\.ban (\d+) (час|минут|минуты|минута)$/i, async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  const user2 = await User.findOne({ telegramId: ctx.message.reply_to_message.from.id });
-  const time = parseInt(ctx.match[1]);
-  const unit = ctx.match[2];
-  const chatId = ctx.message.chat.id;
-  const userId = ctx.message.reply_to_message.from.id;
-  const until = new Date();
-  const chatLink = `https://t.me/${ctx.chat.username}`;
+  try {
+    if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.from) {
+      return ctx.reply('❌ Ответьте на сообщение пользователя, которого хотите заблокировать.');
+    }
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const targetId = ctx.message.reply_to_message.from.id;
+    const user2 = await User.findOne({ telegramId: targetId });
+    const targetNickname = ((user2?.nickname || ctx.message.reply_to_message.from.first_name || 'Пользователь') + '').replace(/[\[\]]/g, '');
+    const time = parseInt(ctx.match[1]);
+    const unit = ctx.match[2];
+    const chatId = ctx.message.chat.id;
+    const until = new Date();
+    const chatLink = `https://t.me/${ctx.chat.username}`;
 
-  const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
-  if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
-    ctx.reply('Вы не являетесь модератором чата.');
-    return;
+    const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
+    if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
+      ctx.reply('Вы не являетесь модератором чата.');
+      return;
+    }
+
+    const targetMember = await bot.telegram.getChatMember(chatId, targetId);
+    if (['administrator', 'creator'].includes(targetMember.status)) {
+      ctx.reply('Вы не можете заблокировать другого модератора.');
+      return;
+    }
+
+    if (unit === 'час') {
+      until.setHours(until.getHours() + time);
+    } else if (unit === 'минута' || unit === 'минуты' || unit === 'минут') {
+      until.setMinutes(until.getMinutes() + time);
+    }
+
+    await bot.telegram.kickChatMember(chatId, targetId, {
+      until_date: until.getTime() / 1000
+    });
+
+    setTimeout(() => {
+      bot.telegram.unbanChatMember(chatId, targetId).catch(() => {});
+      bot.telegram.sendMessage(targetId, 'Ваш бан в чате закончился. Вы можете вернуться в чат <a href="' + chatLink + '">' + ctx.chat.title + '</a>.', { parse_mode: 'HTML' }).catch(() => {});
+    }, until.getTime() - Date.now());
+
+    bot.telegram.sendMessage(targetId, `[${targetNickname}](tg://user?id=${targetId}) вас заблокировали на ${time} ${unit}.`, { parse_mode: 'Markdown' }).catch(() => {});
+    ctx.reply(`Пользователь [${targetNickname}](tg://user?id=${targetId}) заблокирован на ${time} ${unit}.`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error("Ошибка в .ban:", error);
   }
-
-  const targetMember = await bot.telegram.getChatMember(chatId, userId);
-  if (['administrator', 'creator'].includes(targetMember.status)) {
-    ctx.reply('Вы не можете заблокировать другого модератора.');
-    return;
-  }
-
-
-  if (unit === 'час') {
-    until.setHours(until.getHours() + time);
-  } else if (unit === 'минута' || unit === 'минуты' || unit === 'минут') {
-    until.setMinutes(until.getMinutes() + time);
-  }
-
-  bot.telegram.kickChatMember(chatId, userId, {
-    until_date: until.getTime() / 1000
-  });
-
-  setTimeout(() => {
-    bot.telegram.unbanChatMember(chatId, userId);
-    bot.telegram.sendMessage(userId, 'Ваш бан в чате закончился. Вы можете вернуться в чат <a href="' + chatLink + '">' + ctx.chat.title + '</a>.', { parse_mode: 'HTML' }, { parse_mode: 'Markdown' });
-  }, until.getTime() - Date.now());
-
-  bot.telegram.sendMessage(userId, `[${user2.nickname}](tg://user?id=${ctx.message.reply_to_message.from.id}) вас заблокировали на ${time} ${unit}.`, { parse_mode: 'Markdown' });
-  ctx.reply(`Пользователь [${user2.nickname}](tg://user?id=${ctx.message.reply_to_message.from.id}) заблокирован на ${time} ${unit}.`, { parse_mode: 'Markdown' });
-}).catch(error => console.log(error));
+});
 
 bot.hears(/\.unban$/i, async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  const user2 = await User.findOne({ telegramId: ctx.message.reply_to_message.from.id });
-  const chatId = ctx.message.chat.id;
-  const userId = ctx.message.reply_to_message.from.id;
-  const chatName = ctx.message.chat.title;
+  try {
+    if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.from) {
+      return ctx.reply('❌ Ответьте на сообщение пользователя, которого хотите разблокировать.');
+    }
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const targetId = ctx.message.reply_to_message.from.id;
+    const user2 = await User.findOne({ telegramId: targetId });
+    const targetNickname = ((user2?.nickname || ctx.message.reply_to_message.from.first_name || 'Пользователь') + '').replace(/[\[\]]/g, '');
+    const chatId = ctx.message.chat.id;
 
-  const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
-  if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
-    ctx.reply('Вы не являетесь модератором чата.');
-    return;
+    const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
+    if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
+      ctx.reply('Вы не являетесь модератором чата.');
+      return;
+    }
+
+    const targetMember = await bot.telegram.getChatMember(chatId, targetId);
+    if (['administrator', 'creator'].includes(targetMember.status)) {
+      ctx.reply('Вы не можете заблокировать другого модератора.');
+      return;
+    }
+
+    const isBanned = targetMember.status === 'kicked';
+    if (!isBanned) {
+      ctx.reply('Пользователь не в бане.');
+      return;
+    }
+
+    await bot.telegram.unbanChatMember(chatId, targetId);
+    const chatLink = `https://t.me/${ctx.chat.username}`;
+    ctx.reply(`Пользователю [${targetNickname}](tg://user?id=${targetId}) разблокирован доступ в этом чате.`, { parse_mode: 'Markdown' });
+
+    bot.telegram.sendMessage(targetId, 'Ваш бан в чате закончился. Вы можете вернуться в чат <a href="' + chatLink + '">' + ctx.chat.title + '</a>.', { parse_mode: 'HTML' }).catch(() => {});
+  } catch (error) {
+    console.error("Ошибка в .unban:", error);
   }
-
-  const targetMember = await bot.telegram.getChatMember(chatId, userId);
-  if (['administrator', 'creator'].includes(targetMember.status)) {
-    ctx.reply('Вы не можете заблокировать другого модератора.');
-    return;
-  }
-
-  const isBanned = targetMember.status === 'kicked';
-  if (!isBanned) {
-    ctx.reply('Пользователь не в бане.');
-    return;
-  }
-
-  bot.telegram.unbanChatMember(chatId, userId);
-  const chatLink = `https://t.me/${ctx.chat.username}`;
-  ctx.reply(`Пользователю [${user2.nickname}](tg://user?id=${ctx.message.reply_to_message.from.id}) разблокирую в этом чате.`, { parse_mode: 'Markdown' });
-
-  // Отправляем сообщение пользователю в ЛС
-  bot.telegram.sendMessage(userId, 'Ваш бан в чате закончился. Вы можете вернуться в чат <a href="' + chatLink + '">' + ctx.chat.title + '</a>.', { parse_mode: 'HTML' }, { parse_mode: 'Markdown' });
-
-}).catch(error => console.log(error));
+});
 
 bot.hears(/\.mute (\d+) (час|минут|минуты|минута|день|дня|дней)$/i, async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  const user2 = await User.findOne({ telegramId: ctx.message.reply_to_message.from.id });
-  const time = parseInt(ctx.match[1]);
-  const unit = ctx.match[2];
-  const chatId = ctx.message.chat.id;
-  const userId = ctx.message.reply_to_message.from.id;
-  const until = new Date();
+  try {
+    if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.from) {
+      return ctx.reply('❌ Ответьте на сообщение пользователя, которого хотите замутить.');
+    }
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const targetId = ctx.message.reply_to_message.from.id;
+    const user2 = await User.findOne({ telegramId: targetId });
+    const targetNickname = ((user2?.nickname || ctx.message.reply_to_message.from.first_name || 'Пользователь') + '').replace(/[\[\]]/g, '');
+    const time = parseInt(ctx.match[1]);
+    const unit = ctx.match[2];
+    const chatId = ctx.message.chat.id;
+    const until = new Date();
 
-  const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
-  if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
-    ctx.reply('Вы не являетесь модератором чата.');
-    return;
+    const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
+    if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
+      ctx.reply('Вы не являетесь модератором чата.');
+      return;
+    }
+
+    const targetMember = await bot.telegram.getChatMember(chatId, targetId);
+    if (['administrator', 'creator'].includes(targetMember.status)) {
+      ctx.reply('Вы не можете замутить другого модератора.');
+      return;
+    }
+
+    if (unit === 'час') {
+      until.setHours(until.getHours() + time);
+    } else if (unit === 'минута' || unit === 'минуты' || unit === 'минут') {
+      until.setMinutes(until.getMinutes() + time);
+    } else if (unit === 'день' || unit === 'дня' || unit === 'дней') {
+      until.setDate(until.getDate() + time);
+    }
+
+    await bot.telegram.restrictChatMember(chatId, targetId, {
+      until_date: until.getTime() / 1000,
+      can_send_messages: false,
+      can_send_media_messages: false,
+      can_send_other_messages: false,
+      can_add_web_page_previews: false
+    });
+
+    ctx.reply(`Пользователь [${targetNickname}](tg://user?id=${targetId}) замучен на ${time} ${unit}.`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error("Ошибка в .mute:", error);
   }
+});
 
-  const targetMember = await bot.telegram.getChatMember(chatId, userId);
-  if (['administrator', 'creator'].includes(targetMember.status)) {
-    ctx.reply('Вы не можете замутить другого модератора.');
-    return;
+bot.hears(/^\.unmute$/i, async (ctx) => {
+  try {
+    if (!ctx.message.reply_to_message || !ctx.message.reply_to_message.from) {
+      return ctx.reply('❌ Ответьте на сообщение пользователя, которого хотите размутить.');
+    }
+    const user = await User.findOne({ telegramId: ctx.from.id });
+    const targetId = ctx.message.reply_to_message.from.id;
+    const user2 = await User.findOne({ telegramId: targetId });
+    const targetNickname = ((user2?.nickname || ctx.message.reply_to_message.from.first_name || 'Пользователь') + '').replace(/[\[\]]/g, '');
+    const chatId = ctx.message.chat.id;
+
+    const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
+    if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
+      ctx.reply('Вы не являетесь модератором чата.');
+      return;
+    }
+
+    const targetMember = await bot.telegram.getChatMember(chatId, targetId);
+    if (['administrator', 'creator'].includes(targetMember.status)) {
+      ctx.reply('Вы не можете замутить другого модератора.');
+      return;
+    }
+
+    await bot.telegram.restrictChatMember(chatId, targetId, {
+      until_date: 0,
+      can_send_messages: true,
+      can_send_media_messages: true,
+      can_send_other_messages: true,
+      can_add_web_page_previews: true
+    });
+
+    ctx.reply(`Пользователь [${targetNickname}](tg://user?id=${targetId}) размучен.`, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error("Ошибка в .unmute:", error);
   }
-
-  if (unit === 'час') {
-    until.setHours(until.getHours() + time);
-  } else if (unit === 'минута' || unit === 'минуты' || unit === 'минут') {
-    until.setMinutes(until.getMinutes() + time);
-  } else if (unit === 'день' || unit === 'дня' || unit === 'дней') {
-    until.setDate(until.getDate() + time);
-  }
-
-  bot.telegram.restrictChatMember(chatId, userId, {
-    until_date: until.getTime() / 1000,
-    can_send_messages: false,
-    can_send_media_messages: false,
-    can_send_other_messages: false,
-    can_add_web_page_previews: false
-  });
-
-  ctx.reply(`Пользователь [${user2.nickname}](tg://user?id=${ctx.message.reply_to_message.from.id}) замучен на ${time} ${unit}.`, { parse_mode: 'Markdown' });
-}).catch(error => console.log(error));
-
-bot.hears('.unmute', async (ctx) => {
-  const user = await User.findOne({ telegramId: ctx.from.id });
-  const user2 = await User.findOne({ telegramId: ctx.message.reply_to_message.from.id });
-  const chatId = ctx.message.chat.id;
-  const userId = ctx.message.reply_to_message.from.id;
-
-  const chatMember = await bot.telegram.getChatMember(chatId, ctx.from.id);
-  if (!chatMember || !['administrator', 'creator'].includes(chatMember.status)) {
-    ctx.reply('Вы не являетесь модератором чата.');
-    return;
-  }
-
-  const targetMember = await bot.telegram.getChatMember(chatId, userId);
-  if (['administrator', 'creator'].includes(targetMember.status)) {
-    ctx.reply('Вы не можете замутить другого модератора.');
-    return;
-  }
-
-
-  bot.telegram.restrictChatMember(chatId, userId, {
-    until_date: 0,
-    can_send_messages: true,
-    can_send_media_messages: true,
-    can_send_other_messages: true,
-    can_add_web_page_previews: true
-  });
-
-
-  ctx.reply(`Пользователь [${user2.nickname}](tg://user?id=${ctx.message.reply_to_message.from.id}) размучен.`, { parse_mode: 'Markdown' });
-
-}).catch(error => console.log(error));
+});
 // конец команды
 
 const requestSchema = new Mongoose.Schema({
@@ -2188,7 +2310,7 @@ bot.hears(/\.yt\s*(.*)$/i, async (ctx) => {
     console.error(err);
     await ctx.reply('Ошибка.');
   }
-}).catch(error => console.log(error));
+});
 
 bot.action(/^cancelyt:(\d+)$/i, async (ctx) => {
   try {
@@ -2376,98 +2498,59 @@ setInterval(processNextRequest, 5000);
 const { exec } = require('child_process');
 bot.on('message', async (ctx, next) => {
   // Проверяем, что сообщение было отправлено в личные сообщения боту
-  if (ctx.message.chat.type === 'private') {
+  if (ctx.message?.chat?.type === 'private') {
     // Проверяем, что полученное сообщение является голосовым сообщением
     if (ctx.message.voice) {
       const voiceMessage = ctx.message.voice;
-
-      // Получаем информацию о голосовом сообщении
       const fileLink = await ctx.telegram.getFileLink(voiceMessage.file_id);
+      const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const voiceFile = path.join(os.tmpdir(), `grizzly_voice_${uniqueId}.ogg`);
+      const mp3File = path.join(os.tmpdir(), `grizzly_conv_${uniqueId}.mp3`);
 
-      // Скачиваем голосовое сообщение на сервер
-      const voiceFile = 'voice.ogg';
-      const response = await axios({
-        url: fileLink,
-        method: 'GET',
-        responseType: 'stream',
-      });
-      response.data.pipe(fs.createWriteStream(voiceFile));
+      try {
+        await downloadFile(fileLink.href || fileLink.toString(), voiceFile);
 
-      // Конвертируем голосовое сообщение в mp3
-      const mp3File = 'converted.mp3';
-      ffmpeg(voiceFile)
-        .toFormat('mp3')
-        .save(mp3File)
-        .on('end', () => {
-          // Отправляем конвертированную музыку пользователю
-          ctx.replyWithAudio({ source: fs.createReadStream(mp3File) }, { caption: 'audio by grizzly' })
-            .then(() => {
-              // Удаляем временные файлы
-              fs.unlink(voiceFile, (err) => {
-                if (err) {
-                  console.error(`Ошибка при удалении временного файла: ${err}`);
-                }
-              });
-              fs.unlink(mp3File, (err) => {
-                if (err) {
-                  console.error(`Ошибка при удалении временного файла: ${err}`);
-                }
-              });
-            })
-            .catch((err) => {
-              console.error(`Ошибка при отправке музыки: ${err}`);
-            });
-        })
-        .on('error', (error) => {
-          console.error(`Ошибка при конвертации голосового сообщения: ${error}`);
+        await new Promise((resolve, reject) => {
+          ffmpeg(voiceFile)
+            .toFormat('mp3')
+            .save(mp3File)
+            .on('end', resolve)
+            .on('error', reject);
         });
+
+        await ctx.replyWithAudio({ source: fs.createReadStream(mp3File) }, { caption: 'audio by grizzly' });
+      } catch (error) {
+        console.error(`Ошибка при конвертации голосового сообщения: ${error.message || error}`);
+      } finally {
+        safeDeleteFile(voiceFile);
+        safeDeleteFile(mp3File);
+      }
     } else if (ctx.message.audio) {
       const audioMessage = ctx.message.audio;
-
-      // Получаем информацию об аудиофайле
       const fileLink = await ctx.telegram.getFileLink(audioMessage.file_id);
+      const uniqueId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      const audioFile = path.join(os.tmpdir(), `grizzly_audio_${uniqueId}.wav`);
+      const oggFile = path.join(os.tmpdir(), `grizzly_conv_${uniqueId}.ogg`);
 
-      // Скачиваем аудиофайл на сервер
-      const audioFile = 'audio.WAV';
-      const response = await axios({
-        url: fileLink,
-        method: 'GET',
-        responseType: 'stream',
-      });
-      response.data.pipe(fs.createWriteStream(audioFile));
+      try {
+        await downloadFile(fileLink.href || fileLink.toString(), audioFile);
 
-      // Конвертируем аудиофайл в ogg
-      const oggFile = 'converted.ogg';
-      ffmpeg(audioFile)
-        .toFormat('ogg')
-        .save(oggFile)
-        .on('end', () => {
-          // Отправляем конвертированное голосовое сообщение пользователю
-          ctx.replyWithVoice({ source: fs.createReadStream(oggFile) }, { caption: 'voice by grizzly' })
-            .then(() => {
-              // Удаляем временные файлы
-              fs.unlink(audioFile, (err) => {
-                if (err) {
-                  console.error(`Ошибка при удалении временного файла: ${err}`);
-                  ctx.reply(`Ошибка при удалении временного файла: ${err}`);
-                }
-              });
-              fs.unlink(oggFile, (err) => {
-                if (err) {
-                  console.error(`Ошибка при удалении временного файла: ${err}`);
-                  ctx.reply(`Ошибка при удалении временного файла: ${err}`);
-                }
-              });
-            })
-            .catch((err) => {
-              console.error(`Ошибка при отправке голосового сообщения: ${err}`);
-              ctx.reply(`Ошибка при отправке голосового сообщения: ${err}`);
-            });
-        })
-        .on('error', (error) => {
-          console.error(`Ошибка при конвертации аудиофайла: ${error}`);
-          ctx.reply(`Ошибка при конвертации аудиофайла: ${error}`);
+        await new Promise((resolve, reject) => {
+          ffmpeg(audioFile)
+            .toFormat('ogg')
+            .save(oggFile)
+            .on('end', resolve)
+            .on('error', reject);
         });
+
+        await ctx.replyWithVoice({ source: fs.createReadStream(oggFile) }, { caption: 'voice by grizzly' });
+      } catch (error) {
+        console.error(`Ошибка при конвертации аудиофайла: ${error.message || error}`);
+        ctx.reply(`Ошибка при конвертации аудиофайла: ${error.message || error}`);
+      } finally {
+        safeDeleteFile(audioFile);
+        safeDeleteFile(oggFile);
+      }
     }
   }
   next();
@@ -2830,6 +2913,7 @@ marriageSchema.index({ userId: 1, status: 1 }); // Для поиска брак�
 marriageSchema.index({ partnerId: 1, status: 1 }); // Для поиска браков партнера по статусу
 marriageSchema.index({ userId: 1, partnerId: 1 }); // Комбинированный индекс
 marriageSchema.index({ status: 1 }); // Для поиска по статусу
+marriageSchema.index({ status: 1, relationshipScore: -1 }); // Индекс для лидерборда пар
 
 const Marriage = Mongoose.model('Marriage', marriageSchema);
 
@@ -3246,6 +3330,14 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
       return ctx.reply(`❌ У ${existingRequesterNickname} уже есть активный запрос к этому пользователю.`);
     }
 
+    // Проверка, есть ли у отправителя уже отправленный активный запрос
+    for (const [, req] of pendingRequests.entries()) {
+      const sId = typeof req === 'object' ? req.senderId : req;
+      if (Number(sId) === Number(senderId)) {
+        return ctx.reply('❌ У вас уже есть активный отправленный запрос на отношения. Дождитесь ответа или истечения времени.');
+      }
+    }
+
     // ⚡ ОПТИМИЗАЦИЯ: Параллельная проверка браков отправителя и получателя
     const [senderMarriage, targetMarriage] = await Promise.all([
       Marriage.findOne({
@@ -3260,7 +3352,7 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
 
     // Если отправитель уже состоит в браке
     if (senderMarriage) {
-      const partnerId = senderMarriage.userId === senderId ? senderMarriage.partnerId : senderMarriage.userId;
+      const partnerId = getPartnerId(senderMarriage, senderId);
       const partner = await User.findOne({ telegramId: partnerId });
       const partnerNickname = partner?.nickname || `User${partnerId}`;
       return ctx.reply(`❌ Вы уже состоите в браке с ${partnerNickname}.`, { parse_mode: 'HTML' });
@@ -3268,7 +3360,7 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
 
     // Если получатель уже состоит в браке
     if (targetMarriage) {
-      const partnerId = targetMarriage.userId === targetId ? targetMarriage.partnerId : targetMarriage.userId;
+      const partnerId = getPartnerId(targetMarriage, targetId);
       const partner = await User.findOne({ telegramId: partnerId });
       const partnerNickname = partner?.nickname || `User${partnerId}`;
       return ctx.reply(`❌ Этот пользователь уже состоит в браке с ${partnerNickname}.`, { parse_mode: 'HTML' });
@@ -3313,7 +3405,7 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
       }
     }, 120000); // 2 минуты
 
-    pendingRequests.set(targetId, { senderId, requestId: marriageRequest._id, timer: reqTimer });
+    pendingRequests.set(targetId, { senderId, requestId: marriageRequest._id, timer: reqTimer, timerId: reqTimer });
 
   } catch (error) {
     console.error('Ошибка в команде запроса на отношения:', error);
@@ -3353,7 +3445,7 @@ bot.action(/^accept_(\d+)_(\d+)$/, async (ctx) => {
 
     // Удаляем из pending requests и очищаем таймер
     const existingReq = pendingRequests.get(targetId);
-    if (existingReq && existingReq.timer) clearTimeout(existingReq.timer);
+    if (existingReq && (existingReq.timerId || existingReq.timer)) clearTimeout(existingReq.timerId || existingReq.timer);
     pendingRequests.delete(targetId);
 
     // Обновляем статус брака
@@ -3434,7 +3526,7 @@ bot.action(/^decline_(\d+)_(\d+)$/, async (ctx) => {
     }
 
     const existingReq = pendingRequests.get(targetId);
-    if (existingReq && existingReq.timer) clearTimeout(existingReq.timer);
+    if (existingReq && (existingReq.timerId || existingReq.timer)) clearTimeout(existingReq.timerId || existingReq.timer);
     pendingRequests.delete(targetId);
     
     const targetNickname = await getNicknameByTelegramId(targetId);
@@ -3467,7 +3559,7 @@ bot.hears(/^\.отн (да|нет)$/i, async (ctx) => {
 
     const reqData = pendingRequests.get(targetId);
     const senderId = typeof reqData === 'object' ? reqData.senderId : reqData;
-    if (reqData && reqData.timer) clearTimeout(reqData.timer);
+    if (reqData && (reqData.timerId || reqData.timer)) clearTimeout(reqData.timerId || reqData.timer);
     pendingRequests.delete(targetId);
 
     const marriageRequest = await Marriage.findOne({
@@ -3876,12 +3968,16 @@ bot.action(/^rel_buy_prem_(7|30|perm)$/, async (ctx) => {
     const prices = { '7': 5000, '30': 15000, 'perm': 50000 };
     const cost = prices[plan];
 
-    const user = await User.findOne({ telegramId: userId });
-    if (!user || (user.cookies || 0) < cost) {
+    // ⚡ Атомарное списание печенек за премиум с компенсацией
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: userId, cookies: { $gte: cost } },
+      { $inc: { cookies: -cost } },
+      { new: true }
+    );
+    if (!updatedUser) {
       return ctx.answerCbQuery(`❌ Недостаточно печенек! Требуется: ${utils.sp(cost)} 🍪`, { show_alert: true });
     }
 
-    user.cookies -= cost;
     const now = Date.now();
     let currentExp = marriage.premiumExpiresAt && new Date(marriage.premiumExpiresAt) > new Date()
       ? new Date(marriage.premiumExpiresAt).getTime()
@@ -3900,12 +3996,26 @@ bot.action(/^rel_buy_prem_(7|30|perm)$/, async (ctx) => {
       periodText = 'навсегда';
     }
 
-    marriage.isPremium = true;
-    marriage.isPremiumRelations = true;
-    marriage.premiumUntil = newExp;
-    marriage.premiumExpiresAt = newExp;
-
-    await Promise.all([user.save(), marriage.save()]);
+    try {
+      await Marriage.findOneAndUpdate(
+        { _id: marriage._id },
+        {
+          $set: {
+            isPremium: true,
+            isPremiumRelations: true,
+            premiumUntil: newExp,
+            premiumExpiresAt: newExp,
+            lastActivity: new Date()
+          }
+        }
+      );
+    } catch (mErr) {
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: cost } }
+      );
+      throw mErr;
+    }
 
     await ctx.answerCbQuery('🎉 Премиум-отношения успешно активированы!', { show_alert: true });
 
@@ -4108,17 +4218,33 @@ bot.hears(/^\.отн искры(?:\s+купить\s+(\d+))?$/i, async (ctx) => {
     }
 
     const cost = buyAmount * 10;
-    const user = await User.findOne({ telegramId: userId });
-    if (!user || user.cookies < cost) {
-      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: <b>${utils.sp(cost)}</b> 🍪, у вас: <b>${utils.sp(user?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
+    // ⚡ Атомарное списание печенек с проверкой баланса
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: userId, cookies: { $gte: cost } },
+      { $inc: { cookies: -cost } },
+      { new: true }
+    );
+    if (!updatedUser) {
+      const freshUser = await User.findOne({ telegramId: userId });
+      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: <b>${utils.sp(cost)}</b> 🍪, у вас: <b>${utils.sp(freshUser?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
     }
 
-    user.cookies -= cost;
-    marriage.sparks = (marriage.sparks || 0) + buyAmount;
+    let updatedMarriage;
+    try {
+      updatedMarriage = await Marriage.findOneAndUpdate(
+        { _id: marriage._id },
+        { $inc: { sparks: buyAmount } },
+        { new: true }
+      );
+    } catch (mErr) {
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: cost } }
+      );
+      throw mErr;
+    }
 
-    await Promise.all([user.save(), marriage.save()]);
-
-    return ctx.reply(`✅ Вы успешно обменяли <b>${utils.sp(cost)}</b> 🍪 на <b>+${utils.sp(buyAmount)}</b> 🔥 искр!\n🔥 Баланс искр пары: <b>${utils.sp(marriage.sparks)}</b>`, { parse_mode: 'HTML' });
+    return ctx.reply(`✅ Вы успешно обменяли <b>${utils.sp(cost)}</b> 🍪 на <b>+${utils.sp(buyAmount)}</b> 🔥 искр!\n🔥 Баланс искр пары: <b>${utils.sp(updatedMarriage?.sparks || 0)}</b>`, { parse_mode: 'HTML' });
   } catch (e) {
     console.error('Ошибка в .отн искры:', e);
     ctx.reply('❌ Произошла ошибка.');
@@ -4151,15 +4277,28 @@ bot.hears(/^\.отн дом(?:\s+(улучшить|сейф(?:\s+(положит
         return ctx.reply('🏰 Ваш дом уже достиг максимального королевского уровня!');
       }
 
-      if ((marriage.sparks || 0) < currentHouse.upgradeCost) {
-        return ctx.reply(`❌ Для улучшения дома требуется <b>${utils.sp(currentHouse.upgradeCost)}</b> 🔥 искр.\nУ вас в наличии: <b>${utils.sp(marriage.sparks || 0)}</b> 🔥.\n💡 Купите искры: <code>.отн искры купить</code>`, { parse_mode: 'HTML' });
-      }
+      // ⚡ Атомарное списание искр и улучшение уровня дома
+      const updatedMarriage = await Marriage.findOneAndUpdate(
+        { _id: marriage._id, sparks: { $gte: currentHouse.upgradeCost }, 'house.level': currentLvl },
+        {
+          $inc: { sparks: -currentHouse.upgradeCost },
+          $set: {
+            'house.level': nextHouse.level,
+            'house.type': nextHouse.name,
+            'house.comfort': nextHouse.comfort
+          }
+        },
+        { new: true }
+      );
 
-      marriage.sparks -= currentHouse.upgradeCost;
-      marriage.house.level = nextHouse.level;
-      marriage.house.type = nextHouse.name;
-      marriage.house.comfort = nextHouse.comfort;
-      await marriage.save();
+      if (!updatedMarriage) {
+        const freshMarriage = await Marriage.findById(marriage._id);
+        const currentSparks = freshMarriage?.sparks || 0;
+        if (currentSparks < currentHouse.upgradeCost) {
+          return ctx.reply(`❌ Для улучшения дома требуется <b>${utils.sp(currentHouse.upgradeCost)}</b> 🔥 искр.\nУ вас в наличии: <b>${utils.sp(currentSparks)}</b> 🔥.\n💡 Купите искры: <code>.отн искры купить</code>`, { parse_mode: 'HTML' });
+        }
+        return ctx.reply('❌ Не удалось улучшить дом или он уже был улучшен.');
+      }
 
       return ctx.reply(`🎉 <b>Поздравляем с новосельем!</b>\n${nextHouse.icon} Теперь ваше жилье: <b>${nextHouse.name}</b>!\n✨ Уровень уюта вырос до: <b>${nextHouse.comfort}</b>`, { parse_mode: 'HTML' });
     }
@@ -4183,21 +4322,53 @@ bot.hears(/^\.отн дом(?:\s+(улучшить|сейф(?:\s+(положит
       const user = await User.findOne({ telegramId: userId });
 
       if (action === 'положить') {
-        if (!user || user.cookies < amount) {
-          return ctx.reply(`❌ У вас недостаточно печенек на руках. Баланс: ${utils.sp(user?.cookies || 0)} 🍪`);
+        const updatedUser = await User.findOneAndUpdate(
+          { telegramId: userId, cookies: { $gte: amount } },
+          { $inc: { cookies: -amount } },
+          { new: true }
+        );
+        if (!updatedUser) {
+          const freshUser = await User.findOne({ telegramId: userId });
+          return ctx.reply(`❌ У вас недостаточно печенек на руках. Баланс: ${utils.sp(freshUser?.cookies || 0)} 🍪`);
         }
-        user.cookies -= amount;
-        marriage.house.safeCookies = (marriage.house.safeCookies || 0) + amount;
-        await Promise.all([user.save(), marriage.save()]);
-        return ctx.reply(`✅ Вы положили <b>${utils.sp(amount)}</b> 🍪 в семейный сейф!\n💰 Баланс сейфа: <b>${utils.sp(marriage.house.safeCookies)}</b> 🍪`, { parse_mode: 'HTML' });
+        let updatedMarriage;
+        try {
+          updatedMarriage = await Marriage.findOneAndUpdate(
+            { _id: marriage._id },
+            { $inc: { 'house.safeCookies': amount } },
+            { new: true }
+          );
+        } catch (mErr) {
+          await User.findOneAndUpdate(
+            { telegramId: userId },
+            { $inc: { cookies: amount } }
+          );
+          throw mErr;
+        }
+        return ctx.reply(`✅ Вы положили <b>${utils.sp(amount)}</b> 🍪 в семейный сейф!\n💰 Баланс сейфа: <b>${utils.sp(updatedMarriage?.house?.safeCookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
       } else if (action === 'снять') {
-        if ((marriage.house.safeCookies || 0) < amount) {
-          return ctx.reply(`❌ В сейфе недостаточно печенек. Баланс сейфа: ${utils.sp(marriage.house.safeCookies || 0)} 🍪`);
+        const updatedMarriage = await Marriage.findOneAndUpdate(
+          { _id: marriage._id, 'house.safeCookies': { $gte: amount } },
+          { $inc: { 'house.safeCookies': -amount } },
+          { new: true }
+        );
+        if (!updatedMarriage) {
+          const freshMarriage = await Marriage.findById(marriage._id);
+          return ctx.reply(`❌ В сейфе недостаточно печенек. Баланс сейфа: ${utils.sp(freshMarriage?.house?.safeCookies || 0)} 🍪`);
         }
-        marriage.house.safeCookies -= amount;
-        user.cookies += amount;
-        await Promise.all([user.save(), marriage.save()]);
-        return ctx.reply(`✅ Вы забрали <b>${utils.sp(amount)}</b> 🍪 из семейного сейфа!\n💰 Баланс сейфа: <b>${utils.sp(marriage.house.safeCookies)}</b> 🍪`, { parse_mode: 'HTML' });
+        try {
+          await User.findOneAndUpdate(
+            { telegramId: userId },
+            { $inc: { cookies: amount } }
+          );
+        } catch (uErr) {
+          await Marriage.findOneAndUpdate(
+            { _id: marriage._id },
+            { $inc: { 'house.safeCookies': amount } }
+          );
+          throw uErr;
+        }
+        return ctx.reply(`✅ Вы забрали <b>${utils.sp(amount)}</b> 🍪 из семейного сейфа!\n💰 Баланс сейфа: <b>${utils.sp(updatedMarriage?.house?.safeCookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
       }
     }
 
@@ -4258,26 +4429,43 @@ bot.hears(/^\.отн подарить\s+(\d+)$/i, async (ctx) => {
     });
     if (!marriage) return ctx.reply('❌ Вы не состоите в отношениях.');
 
-    const user = await User.findOne({ telegramId: userId });
-    if (!user || user.cookies < gift.price) {
-      return ctx.reply(`❌ У вас не хватает печенек. Подарок стоит: <b>${utils.sp(gift.price)}</b> 🍪, у вас: <b>${utils.sp(user?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
+    // ⚡ Атомарное списание печенек за подарок с компенсацией
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: userId, cookies: { $gte: gift.price } },
+      { $inc: { cookies: -gift.price } },
+      { new: true }
+    );
+    if (!updatedUser) {
+      const freshUser = await User.findOne({ telegramId: userId });
+      return ctx.reply(`❌ У вас не хватает печенек. Подарок стоит: <b>${utils.sp(gift.price)}</b> 🍪, у вас: <b>${utils.sp(freshUser?.cookies || 0)}</b> 🍪`, { parse_mode: 'HTML' });
     }
 
     const partnerId = getPartnerId(marriage, userId);
     const partner = await User.findOne({ telegramId: partnerId });
 
-    user.cookies -= gift.price;
-    marriage.sparks = (marriage.sparks || 0) + gift.sparks;
-    if (!marriage.giftsList) marriage.giftsList = [];
-    marriage.giftsList.push({
-      name: gift.name,
-      icon: gift.icon,
-      fromId: userId,
-      date: new Date()
-    });
-    marriage.totalGiftValue = (marriage.totalGiftValue || 0) + gift.price;
-
-    await Promise.all([user.save(), marriage.save()]);
+    try {
+      await Marriage.findOneAndUpdate(
+        { _id: marriage._id },
+        {
+          $inc: { sparks: gift.sparks, totalGiftValue: gift.price },
+          $push: {
+            giftsList: {
+              name: gift.name,
+              icon: gift.icon,
+              fromId: userId,
+              date: new Date()
+            }
+          },
+          $set: { lastActivity: new Date() }
+        }
+      );
+    } catch (mErr) {
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: gift.price } }
+      );
+      throw mErr;
+    }
 
     const userNick = user.nickname || `User${userId}`;
     const partnerNick = partner?.nickname || `User${partnerId}`;
@@ -4429,20 +4617,12 @@ bot.hears(/^\.отн пт(?:\s+(яйцо(?:\s+(обычное|редкое|ле�
         return ctx.reply('❌ Доступные типы яиц: <code>обычное</code>, <code>редкое</code>, <code>легендарное</code>.\nПример: <code>.отн пт яйцо обычное</code>', { parse_mode: 'HTML' });
       }
 
-      if ((marriage.sparks || 0) < eggInfo.price) {
-        return ctx.reply(`❌ Для покупки этого яйца нужно <b>${utils.sp(eggInfo.price)}</b> 🔥 искр. У вас: <b>${utils.sp(marriage.sparks || 0)}</b> 🔥.\n💡 Купите искры: <code>.отн искры купить</code>`, { parse_mode: 'HTML' });
-      }
-
       if ((marriage.pets?.length || 0) >= 5) {
         return ctx.reply('❌ В вашей семье уже максимальное количество питомцев (5/5).');
       }
 
-      // Вылупление питомца
-      marriage.sparks -= eggInfo.price;
       const randomPet = eggInfo.pool[Math.floor(Math.random() * eggInfo.pool.length)];
-      if (!marriage.pets) marriage.pets = [];
-
-      marriage.pets.push({
+      const newPet = {
         name: randomPet.type,
         type: randomPet.type,
         rarity: randomPet.rarity,
@@ -4451,9 +4631,25 @@ bot.hears(/^\.отн пт(?:\s+(яйцо(?:\s+(обычное|редкое|ле�
         hunger: 100,
         happiness: 100,
         lastFed: new Date()
-      });
+      };
 
-      await marriage.save();
+      // ⚡ Атомарная покупка яйца с проверкой лимита и искр
+      const updatedMarriage = await Marriage.findOneAndUpdate(
+        { _id: marriage._id, sparks: { $gte: eggInfo.price }, 'pets.4': { $exists: false } },
+        {
+          $inc: { sparks: -eggInfo.price },
+          $push: { pets: newPet }
+        },
+        { new: true }
+      );
+
+      if (!updatedMarriage) {
+        const freshMarriage = await Marriage.findById(marriage._id);
+        if ((freshMarriage?.sparks || 0) < eggInfo.price) {
+          return ctx.reply(`❌ Для покупки этого яйца нужно <b>${utils.sp(eggInfo.price)}</b> 🔥 искр. У вас: <b>${utils.sp(freshMarriage?.sparks || 0)}</b> 🔥.\n💡 Купите искры: <code>.отн искры купить</code>`, { parse_mode: 'HTML' });
+        }
+        return ctx.reply('❌ В вашей семье уже максимальное количество питомцев (5/5).');
+      }
 
       return ctx.reply(`
 🥚 <b>ТРЕСК В ИНКУБАТОРЕ...</b> 🐣
@@ -4735,50 +4931,73 @@ bot.hears(/^\.отн подарок\s+(\d+)$/, async (ctx) => {
       return ctx.reply('❌ Пользователь не найден.');
     }
     
-    if (user.cookies < giftAmount) {
-      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: ${giftAmount}, есть: ${user.cookies}`);
+    // ⚡ Атомарное списание печенек у дарителя
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: userId, cookies: { $gte: giftAmount } },
+      { $inc: { cookies: -giftAmount } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      const freshUser = await User.findOne({ telegramId: userId });
+      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: ${giftAmount}, есть: ${freshUser?.cookies || 0}`);
     }
-    
+
     // Находим активный брак
     const marriage = await Marriage.findOne({
       $or: [{ userId: userId }, { partnerId: userId }],
       status: 'accepted'
     });
-    
+
     if (!marriage) {
+      // Возврат печенек
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: giftAmount } }
+      );
       return ctx.reply('❌ Вы не состоите в отношениях.');
     }
-    
+
     const partnerId = getPartnerId(marriage, userId);
-    
+
     // ⚡ ОПТИМИЗАЦИЯ: Загружаем партнера одним запросом
     const partner = await User.findOne({ telegramId: partnerId });
-    
+
     if (!partner) {
+      // Возврат печенек
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: giftAmount } }
+      );
       return ctx.reply('❌ Партнер не найден.');
     }
-    
-    // Переводим подарок
-    user.cookies -= giftAmount;
-    partner.cookies += giftAmount;
-    
-    // Обновляем статистику брака
-    if (Number(marriage.userId) === Number(userId)) {
-      marriage.giftsSent += 1;
-      marriage.giftsReceived += 1;
-    } else {
-      marriage.giftsReceived += 1;
-      marriage.giftsSent += 1;
+
+    // ⚡ Зачисление подарка партнеру с компенсацией при ошибке
+    try {
+      await User.findOneAndUpdate(
+        { telegramId: partnerId },
+        { $inc: { cookies: giftAmount } }
+      );
+    } catch (creditErr) {
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: giftAmount } }
+      );
+      throw creditErr;
     }
-    marriage.totalGiftValue += giftAmount;
-    marriage.lastActivity = new Date();
-    
-    // ⚡ ОПТИМИЗАЦИЯ: Сохраняем все параллельно
-    await Promise.all([
-      user.save(),
-      partner.save(),
-      marriage.save()
-    ]);
+
+    // ⚡ Атомарное обновление статистики брака
+    await Marriage.findOneAndUpdate(
+      { _id: marriage._id },
+      {
+        $inc: {
+          totalGiftValue: giftAmount,
+          giftsSent: 1,
+          giftsReceived: 1
+        },
+        $set: { lastActivity: new Date() }
+      }
+    );
     
     // ⚡ ОПТИМИЗАЦИЯ: Используем nickname напрямую из объектов
     const userNickname = user.nickname ? `<a href="tg://user?id=${userId}">${user.nickname}</a>` : `<a href="tg://user?id=${userId}">User${userId}</a>`;
@@ -4840,7 +5059,7 @@ bot.hears(/^\.отн статистика$/, async (ctx) => {
 • Общая стоимость: ${marriage.totalGiftValue} печенек
 
 🏆 <b>Достижения:</b>
-${marriage.achievements.length > 0 ? marriage.achievements.map(ach => `• ${ach}`).join('\n') : '• Пока нет достижений'}
+${(marriage.achievements || []).length > 0 ? marriage.achievements.map(ach => `• ${ach}`).join('\n') : '• Пока нет достижений'}
 
 💡 <i>Продолжайте дарить подарки и проявлять заботу!</i>
     `;
@@ -4982,6 +5201,7 @@ bot.hears(/^\.отн свидание$/, async (ctx) => {
     marriage.lastActivity = new Date();
     
     // Добавляем достижение
+    if (!marriage.achievements) marriage.achievements = [];
     if (!marriage.achievements.includes('Первое свидание')) {
       marriage.achievements.push('Первое свидание');
     }
@@ -5035,7 +5255,8 @@ function calculateRelationshipScore(marriage) {
   const achievementScore = (marriage.achievements?.length || 0) * 500;
   const bankScore = (marriage.jointBank || 0) / 10;
   const sparksScore = (marriage.sparks || 0) / 5;
-  const expScore = (marriage.exp || 0) + ((marriage.level || 1) - 1) * 250;
+  const currentLvl = typeof getCoupleLevel === 'function' ? getCoupleLevel(marriage) : (marriage.level || 1);
+  const expScore = (marriage.exp || 0) + (currentLvl - 1) * 250;
   
   return Math.floor(daysTogether * 10 + giftScore + achievementScore + bankScore + sparksScore + expScore);
 }
@@ -5056,6 +5277,7 @@ function calculateRelationshipLevel(score) {
 
 // Функция для проверки и добавления достижений
 async function checkAndAddAchievements(marriage) {
+  if (!marriage.achievements) marriage.achievements = [];
   const startDate = marriage.acceptedAt || marriage.createdAt || new Date();
   const daysTogether = Math.max(0, Math.floor((Date.now() - new Date(startDate).getTime()) / (1000 * 60 * 60 * 24)));
   let newAchievements = [];
@@ -5181,29 +5403,38 @@ bot.action(/^wedding_gift_(.+)_(\d+)$/, async (ctx) => {
       return ctx.answerCbQuery('❌ Вы не можете дарить подарки сами себе!', { show_alert: true });
     }
     
-    // Проверяем, не дарил ли уже этот гость
-    if (marriage.weddingGuests.includes(guestId)) {
-      return ctx.answerCbQuery('❌ Вы уже подарили подарок молодоженам!', { show_alert: true });
-    }
-    
-    const guest = await User.findOne({ telegramId: guestId });
-    if (!guest) {
-      return ctx.answerCbQuery('❌ Пользователь не найден.', { show_alert: true });
-    }
-    
-    if (guest.cookies < giftAmount) {
+    // ⚡ Атомарная проверка баланса и списание печенек гостя
+    const updatedGuest = await User.findOneAndUpdate(
+      { telegramId: guestId, cookies: { $gte: giftAmount } },
+      { $inc: { cookies: -giftAmount } },
+      { new: true }
+    );
+    if (!updatedGuest) {
       return ctx.answerCbQuery(`❌ У вас недостаточно печенек. Нужно: ${giftAmount}`, { show_alert: true });
     }
     
-    // Переводим подарок
-    guest.cookies -= giftAmount;
-    await guest.save();
-    
-    // Добавляем подарок в общий банк пары
-    marriage.jointBank += giftAmount;
-    marriage.weddingGiftsTotal += giftAmount;
-    marriage.weddingGuests.push(guestId);
-    await marriage.save();
+    // ⚡ Атомарное добавление в weddingGuests и зачисление в jointBank
+    const updatedMarriage = await Marriage.findOneAndUpdate(
+      {
+        _id: marriageId,
+        status: 'accepted',
+        weddingGuests: { $ne: guestId }
+      },
+      {
+        $inc: { jointBank: giftAmount, weddingGiftsTotal: giftAmount },
+        $push: { weddingGuests: guestId }
+      },
+      { new: true }
+    );
+
+    if (!updatedMarriage) {
+      // Возврат печенек если гость уже дарил подарок
+      await User.findOneAndUpdate(
+        { telegramId: guestId },
+        { $inc: { cookies: giftAmount } }
+      );
+      return ctx.answerCbQuery('❌ Вы уже подарили подарок молодоженам!', { show_alert: true });
+    }
     
     const guestNickname = await getNicknameByTelegramId(guestId);
     const user1Nickname = await getNicknameByTelegramId(marriage.userId);
@@ -5294,37 +5525,49 @@ bot.hears(/^\.отн банк внести\s+(\d+)$/, async (ctx) => {
       return ctx.reply('❌ Вы не состоите в браке.');
     }
     
-    const user = await User.findOne({ telegramId: userId });
-    if (!user) {
-      return ctx.reply('❌ Пользователь не найден.');
+    // ⚡ Атомарное списание печенек у пользователя
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: userId, cookies: { $gte: amount } },
+      { $inc: { cookies: -amount } },
+      { new: true }
+    );
+    if (!updatedUser) {
+      const freshUser = await User.findOne({ telegramId: userId });
+      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: ${amount}, есть: ${freshUser?.cookies || 0}`);
     }
     
-    if (user.cookies < amount) {
-      return ctx.reply(`❌ У вас недостаточно печенек. Нужно: ${amount}, есть: ${user.cookies}`);
+    // ⚡ Атомарное зачисление в совместный банк пары с историей и компенсацией
+    let updatedMarriage;
+    try {
+      updatedMarriage = await Marriage.findOneAndUpdate(
+        { _id: marriage._id },
+        {
+          $inc: { jointBank: amount },
+          $push: {
+            jointBankHistory: {
+              userId: userId,
+              action: 'deposit',
+              amount: amount,
+              date: new Date()
+            }
+          },
+          $set: { lastActivity: new Date() }
+        },
+        { new: true }
+      );
+    } catch (mErr) {
+      await User.findOneAndUpdate(
+        { telegramId: userId },
+        { $inc: { cookies: amount } }
+      );
+      throw mErr;
     }
-    
-    // Переводим средства
-    user.cookies -= amount;
-    marriage.jointBank += amount;
-    
-    // Записываем операцию в историю
-    marriage.jointBankHistory.push({
-      userId: userId,
-      action: 'deposit',
-      amount: amount,
-      date: new Date()
-    });
-    
-    marriage.lastActivity = new Date();
-    
-    await user.save();
-    await marriage.save();
     
     const partnerId = getPartnerId(marriage, userId);
     const userNickname = await getNicknameByTelegramId(userId);
     
     ctx.reply(
-      `✅ Вы внесли ${amount} печенек в совместный банк!\n\n💰 Баланс банка: ${marriage.jointBank} печенек`,
+      `✅ Вы внесли ${amount} печенек в совместный банк!\n\n💰 Баланс банка: ${updatedMarriage?.jointBank || 0} печенек`,
       { parse_mode: 'HTML' }
     );
     
@@ -5405,65 +5648,79 @@ ${userNickname} хочет снять ${amount} печенек из совмес
 bot.action(/^bank_withdraw_confirm_(.+)_(\d+)_(\d+)$/, async (ctx) => {
   try {
     const marriageId = ctx.match[1];
-    const requesterId = parseInt(ctx.match[2]);
-    const amount = parseInt(ctx.match[3]);
+    const requesterId = parseInt(ctx.match[2], 10);
+    const amount = parseInt(ctx.match[3], 10);
     const confirmerId = ctx.from.id;
+
+    // ⚡ Моментальный ответ Telegram и отключение кнопок для защиты от повторных кликов (Replay Protection)
+    await ctx.answerCbQuery().catch(() => {});
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     
     const marriage = await Marriage.findById(marriageId);
     if (!marriage || marriage.status !== 'accepted') {
-      return ctx.answerCbQuery('❌ Брак не найден.', { show_alert: true });
+      return ctx.editMessageText('❌ Брак не найден или не активен.', { parse_mode: 'HTML' });
     }
     
     // Проверяем, что подтверждает именно партнер
     const partnerId = getPartnerId(marriage, requesterId);
     if (Number(confirmerId) !== Number(partnerId)) {
-      return ctx.answerCbQuery('❌ Это не ваш запрос.', { show_alert: true });
-    }
-    
-    if (marriage.jointBank < amount) {
-      return ctx.answerCbQuery('❌ Недостаточно средств в банке.', { show_alert: true });
+      return ctx.editMessageText('❌ Это не ваш запрос.', { parse_mode: 'HTML' });
     }
     
     const requester = await User.findOne({ telegramId: requesterId });
     if (!requester) {
-      return ctx.answerCbQuery('❌ Пользователь не найден.', { show_alert: true });
+      return ctx.editMessageText('❌ Пользователь не найден.', { parse_mode: 'HTML' });
     }
     
-    // Переводим средства
-    marriage.jointBank -= amount;
-    requester.cookies += amount;
-    
-    // Записываем операцию в историю
-    marriage.jointBankHistory.push({
-      userId: requesterId,
-      action: 'withdraw',
-      amount: amount,
-      date: new Date()
-    });
-    
-    marriage.lastActivity = new Date();
-    
-    await requester.save();
-    await marriage.save();
+    // ⚡ Атомарное списание из совместного банка брака с проверкой баланса
+    const updatedMarriage = await Marriage.findOneAndUpdate(
+      {
+        _id: marriageId,
+        status: 'accepted',
+        jointBank: { $gte: amount }
+      },
+      {
+        $inc: { jointBank: -amount },
+        $push: {
+          jointBankHistory: {
+            userId: requesterId,
+            action: 'withdraw',
+            amount: amount,
+            date: new Date()
+          }
+        },
+        $set: { lastActivity: new Date() }
+      },
+      { new: true }
+    );
+
+    if (!updatedMarriage) {
+      return ctx.editMessageText('❌ Недостаточно средств в банке или запрос уже был обработан.', { parse_mode: 'HTML' });
+    }
+
+    // Начисляем печеньки запросившему пользователю
+    await User.findOneAndUpdate(
+      { telegramId: requesterId },
+      { $inc: { cookies: amount } }
+    );
     
     const confirmerNickname = await getNicknameByTelegramId(confirmerId);
     
-    ctx.answerCbQuery('✅ Снятие средств подтверждено!', { show_alert: true });
     ctx.editMessageText(
-      `✅ Вы подтвердили снятие ${amount} печенек.\n\n🏦 Баланс банка: ${marriage.jointBank} печенек`,
+      `✅ Вы подтвердили снятие ${amount} печенек.\n\n🏦 Баланс банка: ${updatedMarriage.jointBank} печенек`,
       { parse_mode: 'HTML' }
     );
     
     // Уведомляем того, кто запросил
     ctx.telegram.sendMessage(
       requesterId,
-      `✅ ${confirmerNickname} одобрил(а) снятие средств!\n\n💰 Вы получили ${amount} печенек\n🏦 Баланс банка: ${marriage.jointBank} печенек`,
+      `✅ ${confirmerNickname} одобрил(а) снятие средств!\n\n💰 Вы получили ${amount} печенек\n🏦 Баланс банка: ${updatedMarriage.jointBank} печенек`,
       { parse_mode: 'HTML' }
     ).catch(() => {});
     
   } catch (error) {
     console.error('Ошибка при подтверждении снятия:', error);
-    ctx.answerCbQuery('❌ Произошла ошибка.', { show_alert: true });
+    ctx.editMessageText('❌ Произошла ошибка при подтверждении снятия.', { parse_mode: 'HTML' });
   }
 });
 
@@ -5471,24 +5728,27 @@ bot.action(/^bank_withdraw_confirm_(.+)_(\d+)_(\d+)$/, async (ctx) => {
 bot.action(/^bank_withdraw_reject_(.+)_(\d+)_(\d+)$/, async (ctx) => {
   try {
     const marriageId = ctx.match[1];
-    const requesterId = parseInt(ctx.match[2]);
-    const amount = parseInt(ctx.match[3]);
+    const requesterId = parseInt(ctx.match[2], 10);
+    const amount = parseInt(ctx.match[3], 10);
     const confirmerId = ctx.from.id;
+
+    // ⚡ Моментальный ответ и отключение кнопок
+    await ctx.answerCbQuery('❌ Запрос отклонен.', { show_alert: true }).catch(() => {});
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
     
     const marriage = await Marriage.findById(marriageId);
     if (!marriage || marriage.status !== 'accepted') {
-      return ctx.answerCbQuery('❌ Брак не найден.', { show_alert: true });
+      return ctx.editMessageText('❌ Брак не найден.', { parse_mode: 'HTML' });
     }
     
     // Проверяем, что отклоняет именно партнер
     const partnerId = getPartnerId(marriage, requesterId);
     if (Number(confirmerId) !== Number(partnerId)) {
-      return ctx.answerCbQuery('❌ Это не ваш запрос.', { show_alert: true });
+      return ctx.editMessageText('❌ Это не ваш запрос.', { parse_mode: 'HTML' });
     }
     
     const confirmerNickname = await getNicknameByTelegramId(confirmerId);
     
-    ctx.answerCbQuery('❌ Запрос отклонен.', { show_alert: true });
     ctx.editMessageText(
       `❌ Вы отклонили запрос на снятие ${amount} печенек.`,
       { parse_mode: 'HTML' }
@@ -5503,32 +5763,33 @@ bot.action(/^bank_withdraw_reject_(.+)_(\d+)_(\d+)$/, async (ctx) => {
     
   } catch (error) {
     console.error('Ошибка при отклонении снятия:', error);
-    ctx.answerCbQuery('❌ Произошла ошибка.', { show_alert: true });
+    ctx.editMessageText('❌ Произошла ошибка.', { parse_mode: 'HTML' });
   }
 });
 
 // === 📌 Топ пар (.отн топ) ===
 bot.hears(/^\.отн топ$/, async (ctx) => {
   try {
-    const marriages = await Marriage.find({ status: 'accepted' });
+    // ⚡ ОПТИМИЗАЦИЯ: Выборка без N+1 последовательных записей в базу
+    const marriages = await Marriage.find({ status: 'accepted' }).lean();
     
-    if (marriages.length === 0) {
+    if (!marriages || marriages.length === 0) {
       return ctx.reply('💔 Пока нет активных браков.');
     }
     
-    // Обновляем рейтинги всех пар
-    for (const marriage of marriages) {
-      marriage.relationshipScore = calculateRelationshipScore(marriage);
-      // Не затираем 30-уровневую систему прогресса пары
-      await marriage.save();
-    }
+    // Рассчитываем рейтинг и уровень в памяти (гармонизация с 30-уровневой системой и искрами)
+    const scoredMarriages = marriages.map(m => {
+      const lvl = typeof getCoupleLevel === 'function' ? getCoupleLevel(m) : (m.level || 1);
+      const score = calculateRelationshipScore(m);
+      return { ...m, calculatedLevel: lvl, calculatedScore: score };
+    });
     
-    // Сортируем по рейтингу
-    marriages.sort((a, b) => (b.relationshipScore || 0) - (a.relationshipScore || 0));
+    // Сортируем по вычисленному рейтингу
+    scoredMarriages.sort((a, b) => b.calculatedScore - a.calculatedScore);
     
     let topText = '🏆 <b>ТОП-10 ПАР</b> 🏆\n\n';
     
-    const topMarriages = marriages.slice(0, 10);
+    const topMarriages = scoredMarriages.slice(0, 10);
     for (let i = 0; i < topMarriages.length; i++) {
       const marriage = topMarriages[i];
       const user1 = await getNicknameByTelegramId(marriage.userId);
@@ -5539,9 +5800,9 @@ bot.hears(/^\.отн топ$/, async (ctx) => {
       const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
       
       topText += `${medal} ${user1} ❤️ ${user2}\n`;
-      topText += `   📊 Рейтинг: ${marriage.relationshipScore || 0} | ⭐ Уровень: ${marriage.level || 1}/30\n`;
+      topText += `   📊 Рейтинг: ${utils.sp(marriage.calculatedScore)} | ⭐ Уровень: ${marriage.calculatedLevel}/30 | 🔥 Искры: ${utils.sp(marriage.sparks || 0)}\n`;
       topText += `   📅 Дней вместе: ${daysTogether}\n`;
-      topText += `   🏦 Совместный банк: ${marriage.jointBank || 0} 🍪\n\n`;
+      topText += `   🏦 Совместный банк: ${utils.sp(marriage.jointBank || 0)} 🍪\n\n`;
     }
     
     ctx.reply(topText, { parse_mode: 'HTML' });
