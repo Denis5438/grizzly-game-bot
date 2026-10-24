@@ -18,6 +18,36 @@ try {
   console.error('Предупреждение: шрифт не удалось загрузить:', fontErr.message);
 }
 
+// 🎨 Celya / Celestiana модули для генерации графики, игр и развлечений
+const {
+  generateMarriageCertificate,
+  generateUltrasoundCard,
+  generateQuoteCard,
+  generateDemotivator,
+  applyPhotoFilter
+} = require('./src/canvasGenerators');
+
+const {
+  parseBetAmount,
+  formatNumber,
+  createDeck,
+  calculateHandScore,
+  formatHand,
+  activeBlackjacks,
+  getBlackjackKeyboard,
+  activeTicTacToe,
+  checkTicTacToeWinner,
+  getTicTacToeKeyboard
+} = require('./src/celyaGames');
+
+const {
+  ZODIAC_SIGNS,
+  getDailyHoroscope,
+  getMagicBallAnswer,
+  getProbability,
+  getHelpMainMenu,
+  getHelpCategoryContent
+} = require('./src/celyaEntertainment');
 
 Mongoose.set('strictQuery', true);
 
@@ -971,134 +1001,53 @@ function countLines(text) {
 bot.hears(/^\.цитата\s*([\s\S]*)?/i, async (ctx) => {
   try {
     let user = await User.findOne({ telegramId: ctx.from.id });
-  let quoteText;
-  if (ctx.message.reply_to_message) {
-    if (ctx.message.reply_to_message.text) {
-      quoteText = ctx.message.reply_to_message.text;
+    let quoteText = '';
+    let authorUser = ctx.from;
+
+    if (ctx.message.reply_to_message) {
+      authorUser = ctx.message.reply_to_message.from || ctx.from;
+      quoteText = ctx.message.reply_to_message.text || ctx.message.reply_to_message.caption || ctx.match[1];
     } else {
-      await ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}), цитируемое сообщение не содержит текста.`, { parse_mode: 'Markdown' });
-      return;
+      quoteText = ctx.match[1];
     }
-  } else {
-    quoteText = ctx.match[1];
-  }
-  if (!quoteText || typeof quoteText !== 'string' || !quoteText.trim()) {
-    return ctx.reply(`[${user ? user.nickname : 'Пользователь'}](tg://user?id=${ctx.from.id}), укажите текст для цитаты или ответьте на текстовое сообщение.`, { parse_mode: 'Markdown' });
-  }
-  if (quoteText.length > 500) {
-    await ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n✖️ Ваш текст не влезает простите, максимальное кол-во символов - 500`, { parse_mode: 'Markdown' });
-    return;
-  }
-  if (countLines(quoteText) > 18) {
-    await ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n✖️ • Простите, ваш текст не вмещается на картинку(`, { parse_mode: 'Markdown' });
-    return;
-  }
-  quoteText = quoteText.replace(/[\uD83C-\uDBFF\uDC00-\uDFFF]|\uD83E[\uDD00-\uDDFF]|\uD83D[\uDC00-\uDE4F]/g, '');
-  // проверяет проверяет длину текста 
-  let maxLineLength = 24; // Максимальное количество символов на строке
-  let lines = [];
-  let currentLine = '';
-  while (quoteText.length > 0) {
-    let line = quoteText.slice(0, maxLineLength);
 
-    // Проверка наличия переноса строки
-    let lineBreakIndex = line.indexOf('\n');
-    if (lineBreakIndex !== -1) {
-      line = line.slice(0, lineBreakIndex + 1); // Включаем символ переноса строки
-      quoteText = quoteText.slice(lineBreakIndex + 1);
-    } else if (quoteText.length > maxLineLength) {
-      let lastSpaceIndex = line.lastIndexOf(' ');
-      if (lastSpaceIndex !== -1) {
-        line = line.slice(0, lastSpaceIndex);
-        quoteText = quoteText.slice(lastSpaceIndex + 1);
-      } else {
-        quoteText = quoteText.slice(maxLineLength);
+    if (!quoteText || typeof quoteText !== 'string' || !quoteText.trim()) {
+      return ctx.reply('❌ Укажите текст для цитаты или используйте команду в ответ на сообщение!');
+    }
+
+    let authorName = authorUser.first_name || authorUser.username || 'Пользователь';
+    // Проверим, есть ли автор в базе User
+    const dbAuthor = await User.findOne({ telegramId: authorUser.id });
+    if (dbAuthor?.nickname) {
+      authorName = dbAuthor.nickname;
+    }
+
+    let avatarUrl = null;
+    try {
+      const photos = await ctx.telegram.getUserProfilePhotos(authorUser.id, 0, 1);
+      if (photos && photos.total_count > 0) {
+        const link = await ctx.telegram.getFileLink(photos.photos[0][photos.photos[0].length - 1].file_id);
+        avatarUrl = link.href || link;
       }
-    } else {
-      quoteText = '';
+    } catch (e) {
+      // Игнорируем сетевые ошибки получения аватара - будет красивый fallback-градиент
     }
-    lines.push(line);
-  }
-  // =====>
-  // Font registered at startup
-  let lineHeight = 30; // высота строки текста
-  let textHeight = lineHeight * lines.length;
-  let canvasHeight = Math.max(textHeight, 400); // минимальная высота canvas 400px
-  const canvas = createCanvas(700, 400);
-  const ctx2d = canvas.getContext('2d');
-  // =====>
-  const imgLink = 'https://cdn.glitch.global/8b2b500c-82ab-48a0-9e7a-54fcda63ec51/1674556857_bogatyr-club-p-fon-na-rabochii-stol-s-tsitatami-fon-4.jpg';
-  const img = await loadImage(imgLink);
-  ctx2d.drawImage(img, 0, 0, 700, canvasHeight);
-  // =====> для получение авы телеграмма
-  // Если нету фото, то добавляем стандартную аву
-  const noAvatar = 'https://okeygeek.ru/wp-content/uploads/2020/03/no_avatar.png';
-  const userId = ctx.message.reply_to_message?.from?.id || ctx.message.from.id;
-  const userProfilePhotos = await ctx.telegram.getUserProfilePhotos(userId);
 
-  if (userProfilePhotos.total_count > 0) {
-    const avatarLink = await ctx.telegram.getFileLink(userProfilePhotos.photos[0][userProfilePhotos.photos[0].length - 1]);
-    const href = avatarLink.href;
-    if (href) {
-      try {
-        const avatar = await loadImage(href);
-        const radius = 100;
-        ctx2d.save();
-        ctx2d.beginPath();
-        ctx2d.arc(radius + canvas.width / 30, radius + canvas.height / 3.9, radius, 0, Math.PI * 2, true);
-        ctx2d.closePath();
-        ctx2d.clip();
-        ctx2d.drawImage(avatar, canvas.width / 30, canvas.height / 3.9, 200, 200);
-        ctx2d.restore();
-      } catch (err) {
-        console.error('Failed to load avatar image:', err.message);
-      }
-    }
-  } else {
-    console.warn('No avatar image found for user');
+    const now = new Date();
+    const timeOptions = { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' };
+    const timestamp = new Intl.DateTimeFormat('ru-RU', timeOptions).format(now);
 
-    // Draw the default avatar image
-    const defaultAvatar = await loadImage(noAvatar);
-    const radius = 100;
-    ctx2d.save();
-    ctx2d.beginPath();
-    ctx2d.arc(radius + canvas.width / 30, radius + canvas.height / 3.9, radius, 0, Math.PI * 2, true);
-    ctx2d.closePath();
-    ctx2d.clip();
-    ctx2d.drawImage(defaultAvatar, canvas.width / 30, canvas.height / 3.9, 200, 200);
-    ctx2d.restore();
-  }
-  // =====>
-  const currentDate = new Date();
-  const formattedDate = `${currentDate.getDate()}.${currentDate.getMonth() + 1}.${currentDate.getFullYear()}`;
-  // Форматирование времени в формате Московского времени
-  const options = { timeZone: 'Europe/Moscow', hour: 'numeric', minute: 'numeric', hour12: false };
-  const formatter = new Intl.DateTimeFormat('default', options);
-  const formattedTime = formatter.format(currentDate);
+    const quoteBuffer = await generateQuoteCard({
+      text: quoteText.trim(),
+      authorName,
+      authorAvatarUrl: avatarUrl,
+      timestamp
+    });
 
-  ctx2d.font = '16px "Futura"';
-  ctx2d.fillStyle = 'white';
-  ctx2d.textAlign = 'left';
-  let replyName = ctx.message.reply_to_message ? ctx.message.reply_to_message.from.first_name : user.firstName;
-  ctx2d.fillText(`© ${replyName}`, canvas.width / 30, canvas.height / 1.2);
-  ctx2d.font = '20px "Futura"';
-  ctx2d.fillText(`@ ${formattedDate}`, canvas.width / 30, canvas.height / 1.1);
-  // =====>
-  ctx2d.font = '25px "Futura"';
-  ctx2d.fillStyle = 'white';
-  ctx2d.textAlign = 'center';
-  let startY = canvasHeight / 2 - textHeight / 2 + lineHeight / 2;
-  lines.forEach(line => {
-    ctx2d.fillText(`${line}`, canvas.width / 1.6, startY);
-    startY += lineHeight;
-  });
-
-  // =====>
-  const image = canvas.toBuffer('image/png');
-  const caption = `[${user.nickname}](tg://user?id=${ctx.from.id}),\nВоть`;
-  await ctx.replyWithPhoto({ source: image }, { caption, parse_mode: 'Markdown' });
+    return ctx.replyWithPhoto({ source: quoteBuffer });
   } catch (error) {
-    console.error("Ошибка в .цитата:", error);
+    console.error('Ошибка в .цитата:', error);
+    ctx.reply('❌ Ошибка при создании цитаты.');
   }
 });
 
@@ -3384,12 +3333,16 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
     const targetNickname = targetUser?.nickname || `User${targetId}`;
 
     const message = await ctx.reply(
-      `💖 • ${targetNickname}, внимание! ${senderNickname} предлагает вступить в отношения.\n⚡ Запрос будет действителен <b>2 минуты</b>.\n\n💡 После принятия вы сможете:\n• Дарить подарки друг другу\n• Получать бонусы за совместную активность\n• Участвовать в совместных играх`,
+      `<a href="tg://user?id=${senderId}">${escapeHtml(senderNickname)}</a>\n` +
+      `<a href="tg://user?id=${targetId}">${escapeHtml(targetNickname)}</a>,\n` +
+      `💖 • ${escapeHtml(targetNickname)} минуточку внимания! ${escapeHtml(senderNickname)} предлагает вступить в отношения.\n` +
+      `🕒 • Запрос будет действителен в течение 2 минут.\n` +
+      `💭 • Принять решение .отн да / .отн нет`,
       {
         parse_mode: 'HTML',
         ...Markup.inlineKeyboard([[
-          Markup.button.callback('✅ Принять', `accept_${targetId}_${senderId}`),
-          Markup.button.callback('❌ Отклонить', `decline_${targetId}_${senderId}`)
+          Markup.button.callback('Да', `accept_${targetId}_${senderId}`),
+          Markup.button.callback('Нет', `decline_${targetId}_${senderId}`)
         ]])
       }
     );
@@ -3413,8 +3366,102 @@ bot.hears(/^\.отн запрос(?:\s+(@\w+))?$/i, async (ctx) => {
   }
 });
 
+// Функция завершения вступления в отношения с генерацией свидетельства о браке на Canvas
+async function completeMarriageAcceptance(ctx, marriageRequest, senderId, targetId, isButton = false) {
+  marriageRequest.status = 'accepted';
+  marriageRequest.acceptedAt = new Date();
+  marriageRequest.lastActivity = new Date();
+  marriageRequest.sparks = 100;
+  marriageRequest.level = 1;
+  marriageRequest.exp = 0;
+  marriageRequest.house = { type: 'Шалаш в лесу', level: 1, comfort: 10, safeCookies: 0 };
+  await marriageRequest.save();
 
+  const [senderUser, targetUser] = await Promise.all([
+    User.findOne({ telegramId: senderId }),
+    User.findOne({ telegramId: targetId })
+  ]);
 
+  if (senderUser) {
+    senderUser.partner = targetId;
+    senderUser.cookies = (senderUser.cookies || 0) + 100;
+    await senderUser.save();
+  }
+  if (targetUser) {
+    targetUser.partner = senderId;
+    targetUser.cookies = (targetUser.cookies || 0) + 100;
+    await targetUser.save();
+  }
+
+  const senderNick = senderUser?.nickname || `User${senderId}`;
+  const targetNick = targetUser?.nickname || `User${targetId}`;
+
+  // Получаем аватары для свидетельства
+  let p1Avatar = null;
+  let p2Avatar = null;
+  try {
+    const p1Photos = await ctx.telegram.getUserProfilePhotos(senderId, 0, 1);
+    if (p1Photos?.total_count > 0) {
+      const link = await ctx.telegram.getFileLink(p1Photos.photos[0][p1Photos.photos[0].length - 1].file_id);
+      p1Avatar = link.href || link;
+    }
+  } catch (e) {}
+
+  try {
+    const p2Photos = await ctx.telegram.getUserProfilePhotos(targetId, 0, 1);
+    if (p2Photos?.total_count > 0) {
+      const link = await ctx.telegram.getFileLink(p2Photos.photos[0][p2Photos.photos[0].length - 1].file_id);
+      p2Avatar = link.href || link;
+    }
+  } catch (e) {}
+
+  const certDateStr = new Date().toLocaleDateString('ru-RU');
+  let certBuffer = null;
+  try {
+    certBuffer = await generateMarriageCertificate({
+      partner1Nick: senderNick,
+      partner2Nick: targetNick,
+      dateStr: certDateStr,
+      partner1Avatar: p1Avatar,
+      partner2Avatar: p2Avatar
+    });
+  } catch (canvasErr) {
+    console.error('Ошибка создания свидетельства о браке:', canvasErr);
+  }
+
+  const certCaption =
+    '📒 • Дорогие молодые! От всего сердца поздравляю Вас с вступлением в законные отношения и ' +
+    'образованием семьи! Любовь – самое прекрасное чувство в человеческой жизни. Пусть Ваша любовь будет ' +
+    'такой же долгой, как Ваша жизнь! Живите в любви, счастье и радости, пусть у Вас будут здоровые детки ' +
+    'и бесконечное тепло в доме!';
+
+  if (isButton) {
+    await ctx.editMessageText(
+      `💖 <a href="tg://user?id=${targetId}">${escapeHtml(targetNick)}</a> принял(а) предложение <a href="tg://user?id=${senderId}">${escapeHtml(senderNick)}</a>!\n\n🎉 Поздравляем с началом законных отношений!\n🔥 Вашей паре начислено 100 стартовых искр!`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+  } else {
+    await ctx.reply(
+      `💖 <a href="tg://user?id=${targetId}">${escapeHtml(targetNick)}</a> принял(а) предложение <a href="tg://user?id=${senderId}">${escapeHtml(senderNick)}</a>!\n\n🎉 Поздравляем с началом законных отношений!\n🔥 Вашей паре начислено 100 стартовых искр!`,
+      { parse_mode: 'HTML' }
+    ).catch(() => {});
+  }
+
+  if (certBuffer) {
+    await ctx.replyWithPhoto({ source: certBuffer }, { caption: certCaption, parse_mode: 'HTML' }).catch(async (pErr) => {
+      console.error('Ошибка отправки свидетельства фото:', pErr);
+      await ctx.reply(certCaption, { parse_mode: 'HTML' });
+    });
+  } else {
+    await ctx.reply(certCaption, { parse_mode: 'HTML' });
+  }
+
+  ctx.telegram.sendMessage(
+    senderId,
+    `💖 <a href="tg://user?id=${targetId}">${escapeHtml(targetNick)}</a> согласился(лась) на ваши отношения! Поздравляем! 🎉\n🔥 Вашей паре начислено 100 стартовых искр!`,
+    { parse_mode: 'HTML' }
+  ).catch(() => {});
+}
 
 // === ✅ Принятие запроса (Кнопка) ===
 bot.action(/^accept_(\d+)_(\d+)$/, async (ctx) => {
@@ -3448,47 +3495,8 @@ bot.action(/^accept_(\d+)_(\d+)$/, async (ctx) => {
     if (existingReq && (existingReq.timerId || existingReq.timer)) clearTimeout(existingReq.timerId || existingReq.timer);
     pendingRequests.delete(targetId);
 
-    // Обновляем статус брака
-    marriageRequest.status = 'accepted';
-    marriageRequest.acceptedAt = new Date();
-    marriageRequest.lastActivity = new Date();
-    await marriageRequest.save();
-
-    // Получаем пользователей из базы
-    const sender = await User.findOne({ telegramId: senderId });
-    const target = await User.findOne({ telegramId: targetId });
-
-    if (!sender || !target) {
-      return ctx.editMessageText('❌ Один из пользователей не найден.');
-    }
-
-    // Устанавливаем партнеров в базе данных
-    sender.partner = targetId;
-    target.partner = senderId;
-    await sender.save();
-    await target.save();
-
-    const senderNickname = await getNicknameByTelegramId(senderId);
-    const targetNickname = await getNicknameByTelegramId(targetId);
-
-    // Уведомляем о принятии запроса
-    ctx.editMessageText(
-      `💖 ${targetNickname} принял(а) предложение ${senderNickname}!\n\n🎉 Поздравляем с началом отношений!\n\n💡 Теперь вы можете:\n• Дарить подарки: .отн подарок <сумма>\n• Смотреть статистику: .отн статистика\n• Получать бонусы за совместную активность!`, 
-      { parse_mode: 'HTML' }
-    );
-
-    // Уведомляем отправителя запроса
-    ctx.telegram.sendMessage(
-      senderId, 
-      `💖 Ваше предложение принято! Теперь вы в отношениях с ${targetNickname}.\n\n💡 Используйте .отн помощь для просмотра доступных команд.`, 
-      { parse_mode: 'HTML' }
-    ).catch(() => {});
-
-    // Даем бонус за вступление в отношения
-    sender.cookies += 100;
-    target.cookies += 100;
-    await sender.save();
-    await target.save();
+    // Завершаем принятие с генерацией свидетельства
+    await completeMarriageAcceptance(ctx, marriageRequest, senderId, targetId, true);
 
   } catch (error) {
     console.error('Ошибка при принятии запроса:', error);
@@ -3581,26 +3589,13 @@ bot.hears(/^\.отн (да|нет)$/i, async (ctx) => {
     const targetNick = targetUser?.nickname || `User${targetId}`;
 
     if (answer === 'да') {
-      marriageRequest.status = 'accepted';
-      marriageRequest.acceptedAt = new Date();
-      marriageRequest.lastActivity = new Date();
-      marriageRequest.sparks = 100;
-      marriageRequest.level = 1;
-      marriageRequest.exp = 0;
-      marriageRequest.house = { type: 'Шалаш в лесу', level: 1, comfort: 10, safeCookies: 0 };
-      await marriageRequest.save();
-
-      if (senderUser) { senderUser.partner = targetId; await senderUser.save(); }
-      if (targetUser) { targetUser.partner = senderId; await targetUser.save(); }
-
-      ctx.reply(`💖 <a href="tg://user?id=${targetId}">${targetNick}</a> принял(а) предложение <a href="tg://user?id=${senderId}">${senderNick}</a>!\n\n🎉 Поздравляем с началом отношений!\n🔥 Вашей паре начислено 100 стартовых искр!\n\n💡 Напишите <code>.отн я</code> чтобы посмотреть визитку пары.`, { parse_mode: 'HTML' });
-      ctx.telegram.sendMessage(senderId, `💖 <a href="tg://user?id=${targetId}">${targetNick}</a> согласился(лась) на ваши отношения! Поздравляем! 🎉`, { parse_mode: 'HTML' }).catch(() => {});
+      await completeMarriageAcceptance(ctx, marriageRequest, senderId, targetId, false);
     } else {
       marriageRequest.status = 'divorced';
       marriageRequest.divorcedAt = new Date();
       await marriageRequest.save();
 
-      ctx.reply(`💔 <a href="tg://user?id=${targetId}">${targetNick}</a> отклонил(а) предложение <a href="tg://user?id=${senderId}">${senderNick}</a>.`, { parse_mode: 'HTML' });
+      ctx.reply(`💔 <a href="tg://user?id=${targetId}">${escapeHtml(targetNick)}</a> отклонил(а) предложение <a href="tg://user?id=${senderId}">${escapeHtml(senderNick)}</a>.`, { parse_mode: 'HTML' });
       ctx.telegram.sendMessage(senderId, `💔 Ваше предложение было отклонено.`, { parse_mode: 'HTML' }).catch(() => {});
     }
   } catch (err) {
@@ -4506,20 +4501,59 @@ bot.hears(/^\.(узи|беременность)$/i, async (ctx) => {
     }
 
     const dueTime = new Date(marriage.pregnancy.dueAt).getTime();
-    const leftMs = Math.max(0, dueTime - Date.now());
+    const nowMs = Date.now();
+    const leftMs = Math.max(0, dueTime - nowMs);
     const leftHours = Math.floor(leftMs / (1000 * 60 * 60));
     const leftMinutes = Math.floor((leftMs % (1000 * 60 * 60)) / (1000 * 60));
-    const genderText = marriage.pregnancy.babyGender === 'м' ? 'Мальчик 👦' : 'Девочка 👧';
 
-    return ctx.reply(`
-🏥 <b>РЕЗУЛЬТАТЫ УЗИ ОБСЛЕДОВАНИЯ</b>
+    // Расчет срока в неделях (от 4 до 40 недель в зависимости от прогресса срока)
+    const startedMs = marriage.pregnancy.startedAt ? new Date(marriage.pregnancy.startedAt).getTime() : (dueTime - 12 * 60 * 60 * 1000);
+    const totalDuration = Math.max(1, dueTime - startedMs);
+    const progress = Math.min(1, Math.max(0, (nowMs - startedMs) / totalDuration));
+    const passedWeeks = Math.min(40, Math.max(4, Math.floor(4 + progress * 36)));
 
-🤰 <b>Статус:</b> Беременность протекает отлично!
-⏳ <b>До родов осталось:</b> ~${leftHours} ч. ${leftMinutes} мин.
-👶 <b>Пол будущего малыша:</b> <b>${genderText}</b>
+    // Определение пола: на ранних сроках (<12 нед.) пол малыша — секрет
+    let genderText = 'Секрет 🙈 (рано определять)';
+    if (passedWeeks >= 12) {
+      genderText = marriage.pregnancy.babyGender === 'м' ? 'Мальчик 👦' : 'Девочка 👧';
+    }
+    const heartbeatBpm = 148 + Math.floor(Math.random() * 14);
 
-✨ <i>Готовьтесь к пополнению в семье! Когда малыш родится, вы сможете заботиться о нем через команду .рб</i>
-`, { parse_mode: 'HTML' });
+    const partnerId = getPartnerId(marriage, userId);
+    const [u1, u2] = await Promise.all([
+      User.findOne({ telegramId: userId }),
+      User.findOne({ telegramId: partnerId })
+    ]);
+    const motherNick = (marriage.pregnancy.motherId === userId ? u1?.nickname : u2?.nickname) || u1?.nickname || 'Мама';
+    const fatherNick = (marriage.pregnancy.motherId === userId ? u2?.nickname : u1?.nickname) || u2?.nickname || 'Папа';
+
+    let uziBuffer = null;
+    try {
+      uziBuffer = await generateUltrasoundCard({
+        weeks: passedWeeks,
+        heartbeat: heartbeatBpm,
+        genderText,
+        motherNick,
+        fatherNick,
+        leftHours
+      });
+    } catch (err) {
+      console.error('Ошибка создания карточки УЗИ:', err);
+    }
+
+    const caption =
+      `🏥 <b>РЕЗУЛЬТАТЫ УЗИ ОБСЛЕДОВАНИЯ</b>\n\n` +
+      `🤰 <b>Срок беременности:</b> ~${passedWeeks} нед.\n` +
+      `💓 <b>Сердцебиение (ЧСС):</b> ${heartbeatBpm} уд/мин (Норма)\n` +
+      `👶 <b>Пол будущего малыша:</b> <b>${genderText}</b>\n` +
+      `⏳ <b>До родов осталось:</b> ~${leftHours} ч. ${leftMinutes} мин.\n\n` +
+      `✨ <i>Берегите маму и малыша! Когда малыш родится, вы сможете заботиться о нем через команду .рб</i>`;
+
+    if (uziBuffer) {
+      return ctx.replyWithPhoto({ source: uziBuffer }, { caption, parse_mode: 'HTML' });
+    } else {
+      return ctx.reply(caption, { parse_mode: 'HTML' });
+    }
 
   } catch (e) {
     console.error('Ошибка в .узи:', e);
@@ -6110,6 +6144,778 @@ bot.hears(/^\.отн прогулка$/, async (ctx) => {
 });
 
 bot.hears('/pingtest', (ctx) => ctx.reply('pong!'));
+
+// =============================================================
+// CELYA / CELESTIANA ФУНКЦИОНАЛ: ГРАФИКА, ИГРЫ, РАЗВЛЕЧЕНИЯ
+// =============================================================
+
+// Вспомогательная функция обработки демотиватора (поддерживает ответ на фото и фото с подписью)
+async function handleDemotivator(ctx, rawText) {
+  try {
+    const photoArr = ctx.message?.reply_to_message?.photo || ctx.message?.photo;
+    if (!photoArr || photoArr.length === 0) {
+      return ctx.reply(
+        '❌ Отправьте команду в ответ на фотографию или прикрепите фото к сообщению!\n💡 <i>Пример:</i> <code>.демотиватор Жизнь / Она прекрасна</code>',
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    const text = (rawText || '').trim();
+    let title = 'ДЕМОТИВАТОР';
+    let subtitle = '';
+
+    if (text) {
+      const parts = text.split(/\s*[\/\n]\s*/);
+      title = parts[0] ? parts[0].trim().toUpperCase() : 'ДЕМОТИВАТОР';
+      subtitle = parts[1] ? parts[1].trim() : '';
+    }
+
+    const largestPhoto = photoArr[photoArr.length - 1];
+    const fileLink = await ctx.telegram.getFileLink(largestPhoto.file_id);
+    const photoResponse = await axios.get(fileLink.href || fileLink, { responseType: 'arraybuffer' });
+    const imageBuffer = Buffer.from(photoResponse.data);
+
+    const demoBuffer = await generateDemotivator({ imageBuffer, title, subtitle });
+    return await ctx.replyWithPhoto({ source: demoBuffer });
+  } catch (err) {
+    console.error('Ошибка в .демотиватор:', err);
+    ctx.reply('❌ Ошибка при генерации демотиватора.');
+  }
+}
+
+// Вспомогательная функция применения фотофильтра
+async function handlePhotoFilter(ctx, filterName) {
+  try {
+    const photoArr = ctx.message?.reply_to_message?.photo || ctx.message?.photo;
+    if (!photoArr || photoArr.length === 0) {
+      return ctx.reply(
+        `❌ Отправьте команду в ответ на фотографию или прикрепите фото с подписью!\n` +
+        `💡 <i>Доступные фильтры:</i> <code>.чб</code>, <code>.негатив</code>, <code>.пиксель</code>, <code>.зерк</code>, <code>.блюр</code>`,
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    const largestPhoto = photoArr[photoArr.length - 1];
+    const fileLink = await ctx.telegram.getFileLink(largestPhoto.file_id);
+    const photoResponse = await axios.get(fileLink.href || fileLink, { responseType: 'arraybuffer' });
+    const imageBuffer = Buffer.from(photoResponse.data);
+
+    const rawFilter = (filterName || '').toLowerCase().trim();
+    const filterKey = rawFilter === 'зеркало' ? 'зерк' : rawFilter;
+    const filteredBuffer = await applyPhotoFilter(imageBuffer, filterKey);
+
+    return await ctx.replyWithPhoto(
+      { source: filteredBuffer },
+      { caption: `🎨 Фильтр: <b>${filterName}</b>`, parse_mode: 'HTML' }
+    );
+  } catch (err) {
+    console.error('Ошибка в фотофильтре:', err);
+    ctx.reply('❌ Ошибка при обработке фотографии.');
+  }
+}
+
+// === 🖼️ Генератор демотиваторов (.демотиватор / .дем) ===
+bot.hears(/^[.!\/](?:демотиватор|дем)(?:\s+([\s\S]+))?$/i, async (ctx) => {
+  return handleDemotivator(ctx, ctx.match[1]);
+});
+
+// === 🎨 Фотофильтры на Canvas (.чб, .негатив, .пиксель, .зерк, .блюр) ===
+bot.hears(/^[.!\/](чб|негатив|пиксель|зерк|зеркало|блюр)(?:\s+(.+))?$/i, async (ctx) => {
+  return handlePhotoFilter(ctx, ctx.match[1]);
+});
+
+// Обработка команд в подписях к прикрепленным фотографиям
+bot.on('photo', async (ctx, next) => {
+  const cap = ctx.message?.caption;
+  if (!cap) return next();
+
+  const demoMatch = cap.match(/^[.!\/](?:демотиватор|дем)(?:\s+([\s\S]+))?$/i);
+  if (demoMatch) {
+    return handleDemotivator(ctx, demoMatch[1]);
+  }
+
+  const filterMatch = cap.match(/^[.!\/](чб|негатив|пиксель|зерк|зеркало|блюр)(?:\s+(.+))?$/i);
+  if (filterMatch) {
+    return handlePhotoFilter(ctx, filterMatch[1]);
+  }
+
+  return next();
+});
+
+// === 🎲 Кости 2d6 (.кости <ставка>) ===
+bot.hears(/^[.!\/]кости(?:\s+(.+))?$/i, async (ctx) => {
+  try {
+    const user = ctx.state.user || await User.findOne({ telegramId: ctx.from.id });
+    if (!user) return ctx.reply('❌ Вы не зарегистрированы в боте. Напишите /start');
+
+    const rawBet = ctx.match[1];
+    if (!rawBet) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n💡 • Используйте: .кости <сумма>\n🍪 • Ваш баланс: ${formatNumber(user.cookies)}`, { parse_mode: 'Markdown' });
+    }
+
+    const bet = parseBetAmount(rawBet, user.cookies);
+    if (!bet || bet < 5) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Минимальная ставка: 5 печенек.`, { parse_mode: 'Markdown' });
+    }
+
+    // Атомарно списываем ставку для защиты от race condition
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: ctx.from.id, cookies: { $gte: bet } },
+      { $inc: { cookies: -bet } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Недостаточно печенек для ставки!\n🍪 • Баланс: ${formatNumber(user.cookies)}`, { parse_mode: 'Markdown' });
+    }
+
+    // Бросок 2d6
+    const diceEmojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+    const u1 = Math.floor(Math.random() * 6);
+    const u2 = Math.floor(Math.random() * 6);
+    const userTotal = u1 + u2 + 2;
+
+    const b1 = Math.floor(Math.random() * 6);
+    const b2 = Math.floor(Math.random() * 6);
+    const botTotal = b1 + b2 + 2;
+
+    let payout = 0;
+    let outcome = '';
+
+    if (userTotal > botTotal) {
+      payout = bet * 2;
+      outcome = `➕ • <b>Вы выиграли:</b> +${formatNumber(bet)} 🍪!`;
+    } else if (userTotal < botTotal) {
+      payout = 0;
+      outcome = `➖ • <b>Вы проиграли:</b> -${formatNumber(bet)} 🍪.`;
+    } else {
+      payout = bet;
+      outcome = `🤝 • <b>Ничья!</b> Ставка ${formatNumber(bet)} 🍪 возвращена.`;
+    }
+
+    if (payout > 0) {
+      await User.findOneAndUpdate(
+        { telegramId: ctx.from.id },
+        { $inc: { cookies: payout } }
+      );
+    }
+
+    const finalUser = await User.findOne({ telegramId: ctx.from.id });
+    const msg =
+      `<a href="tg://user?id=${ctx.from.id}">${escapeHtml(user.nickname)}</a>,\n` +
+      `🎲 <b>Игра в кости (2d6)</b>\n\n` +
+      `👤 • Ваши кости: ${diceEmojis[u1]} ${diceEmojis[u2]} (<b>${userTotal}</b>)\n` +
+      `🤖 • Кости бота: ${diceEmojis[b1]} ${diceEmojis[b2]} (<b>${botTotal}</b>)\n\n` +
+      `${outcome}\n` +
+      `🍪 • Баланс: <b>${formatNumber(finalUser?.cookies || 0)}</b>`;
+
+    return ctx.reply(msg, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error('Ошибка в .кости:', err);
+    ctx.reply('❌ Произошла ошибка в игре.');
+  }
+});
+
+// === 🪙 Монетка (.монетка <орел/решка> <ставка>) ===
+bot.hears(/^[.!\/]монетка(?:\s+(.+))?$/i, async (ctx) => {
+  try {
+    const user = ctx.state.user || await User.findOne({ telegramId: ctx.from.id });
+    if (!user) return ctx.reply('❌ Вы не зарегистрированы в боте. Напишите /start');
+
+    const rawArgs = ctx.match[1]?.trim();
+    if (!rawArgs) {
+      return ctx.reply(
+        `[${user.nickname}](tg://user?id=${ctx.from.id}),\n` +
+        `💡 • Используйте: .монетка <орел/решка> <сумма>\n` +
+        `🍪 • Ваш баланс: ${formatNumber(user.cookies)}`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    const parts = rawArgs.split(/\s+/);
+    if (parts.length < 2) {
+      return ctx.reply(
+        `[${user.nickname}](tg://user?id=${ctx.from.id}),\n` +
+        `💡 • Используйте: .монетка <орел/решка> <сумма>\n` +
+        `🍪 • Ваш баланс: ${formatNumber(user.cookies)}`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    // Поддержка обоих порядков аргументов: "орел 100" или "100 орел"
+    let sideChoice = null;
+    let rawBet = null;
+    const isSide = (s) => ['о', 'р', 'орел', 'орёл', 'решка'].includes(s.toLowerCase());
+
+    if (isSide(parts[0])) {
+      sideChoice = parts[0].toLowerCase();
+      rawBet = parts.slice(1).join(' ');
+    } else if (isSide(parts[parts.length - 1])) {
+      sideChoice = parts[parts.length - 1].toLowerCase();
+      rawBet = parts.slice(0, -1).join(' ');
+    } else {
+      return ctx.reply(
+        `[${user.nickname}](tg://user?id=${ctx.from.id}),\n` +
+        `❌ • Укажите сторону: «орел» (о) или «решка» (р)!`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    const isEagle = ['о', 'орел', 'орёл'].includes(sideChoice);
+    const bet = parseBetAmount(rawBet, user.cookies);
+    if (!bet || bet < 5) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Минимальная ставка: 5 печенек.`, { parse_mode: 'Markdown' });
+    }
+
+    // Атомарно списываем ставку
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: ctx.from.id, cookies: { $gte: bet } },
+      { $inc: { cookies: -bet } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${ctx.from.id}),\n❌ • Недостаточно печенек для ставки!\n🍪 • Баланс: ${formatNumber(user.cookies)}`, { parse_mode: 'Markdown' });
+    }
+
+    // Бросок монетки: 0 - орел, 1 - решка
+    const flip = Math.random() < 0.5 ? 0 : 1;
+    const flippedEagle = flip === 0;
+    const userWon = (isEagle && flippedEagle) || (!isEagle && !flippedEagle);
+
+    let payout = 0;
+    let outcome = '';
+
+    if (userWon) {
+      payout = bet * 2;
+      outcome = `➕ • <b>Вы угадали и выиграли:</b> +${formatNumber(bet)} 🍪!`;
+    } else {
+      payout = 0;
+      outcome = `➖ • <b>Не повезло:</b> -${formatNumber(bet)} 🍪.`;
+    }
+
+    if (payout > 0) {
+      await User.findOneAndUpdate(
+        { telegramId: ctx.from.id },
+        { $inc: { cookies: payout } }
+      );
+    }
+
+    const finalUser = await User.findOne({ telegramId: ctx.from.id });
+    const coinSymbol = flippedEagle ? '🦅 Орёл' : '🪙 Решка';
+    const choiceSymbol = isEagle ? '🦅 Орёл' : '🪙 Решка';
+
+    const msg =
+      `<a href="tg://user?id=${ctx.from.id}">${escapeHtml(user.nickname)}</a>,\n` +
+      `🪙 <b>Бросок монетки</b>\n\n` +
+      `🎯 • Ваш выбор: <b>${choiceSymbol}</b>\n` +
+      `✨ • Выпало: <b>${coinSymbol}</b>\n\n` +
+      `${outcome}\n` +
+      `🍪 • Баланс: <b>${formatNumber(finalUser?.cookies || 0)}</b>`;
+
+    return ctx.reply(msg, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error('Ошибка в .монетка:', err);
+    ctx.reply('❌ Произошла ошибка в игре.');
+  }
+});
+
+// === 🃏 Блэкджек 21 (.блэкджек / .бк <ставка>) ===
+bot.hears(/^[.!\/](?:блэкджек|бк)(?:\s+(.+))?$/i, async (ctx) => {
+  try {
+    const userId = ctx.from.id;
+    const user = ctx.state.user || await User.findOne({ telegramId: userId });
+    if (!user) return ctx.reply('❌ Вы не зарегистрированы в боте. Напишите /start');
+
+    if (activeBlackjacks.has(userId)) {
+      return ctx.reply('⚠️ У вас уже есть активная игра в Блэкджек! Завершите её перед началом новой.');
+    }
+
+    const rawBet = ctx.match[1];
+    if (!rawBet) {
+      return ctx.reply(
+        `[${user.nickname}](tg://user?id=${userId}),\n` +
+        `💡 • Используйте: .блэкджек <сумма> (или .бк <сумма>)\n` +
+        `🍪 • Ваш баланс: ${formatNumber(user.cookies)}`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    const bet = parseBetAmount(rawBet, user.cookies);
+    if (!bet || bet < 5) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${userId}),\n❌ • Минимальная ставка: 5 печенек.`, { parse_mode: 'Markdown' });
+    }
+
+    // Атомарно списываем ставку
+    const updatedUser = await User.findOneAndUpdate(
+      { telegramId: userId, cookies: { $gte: bet } },
+      { $inc: { cookies: -bet } },
+      { new: true }
+    );
+
+    if (!updatedUser) {
+      return ctx.reply(`[${user.nickname}](tg://user?id=${userId}),\n❌ • Недостаточно печенек для ставки!\n🍪 • Баланс: ${formatNumber(user.cookies)}`, { parse_mode: 'Markdown' });
+    }
+
+    const deck = createDeck();
+    const playerHand = [deck.pop(), deck.pop()];
+    const dealerHand = [deck.pop(), deck.pop()];
+
+    const playerScore = calculateHandScore(playerHand);
+    const dealerScore = calculateHandScore(dealerHand);
+
+    // Проверка натурального Блэкджека (21 с раздачи)
+    if (playerScore === 21) {
+      let outcome = '';
+      let payout = 0;
+      if (dealerScore === 21) {
+        outcome = `🤝 • <b>У обоих Блэкджек!</b> Ничья, ставка ${formatNumber(bet)} 🍪 возвращена.`;
+        payout = bet;
+      } else {
+        const winProfit = Math.floor(bet * 1.5);
+        payout = bet + winProfit;
+        outcome = `🔥 • <b>НАТУРАЛЬНЫЙ БЛЭКДЖЕК!</b> Выигрыш (3:2): +${formatNumber(winProfit)} 🍪!`;
+      }
+
+      if (payout > 0) {
+        await User.findOneAndUpdate({ telegramId: userId }, { $inc: { cookies: payout } });
+      }
+      const finalUser = await User.findOne({ telegramId: userId });
+
+      const msg =
+        `🃏 <b>БЛЭКДЖЕК (21)</b>\n\n` +
+        `👤 <b>Ваши карты:</b> ${formatHand(playerHand)}\n` +
+        `🤖 <b>Карты дилера:</b> ${formatHand(dealerHand)}\n\n` +
+        `${outcome}\n` +
+        `🍪 • Баланс: <b>${formatNumber(finalUser?.cookies || 0)}</b>`;
+
+      return ctx.reply(msg, { parse_mode: 'HTML' });
+    }
+
+    // Игра продолжается
+    const msg =
+      `🃏 <b>БЛЭКДЖЕК (21)</b>\n\n` +
+      `👤 <b>Ваши карты:</b> ${formatHand(playerHand)}\n` +
+      `🤖 <b>Карта дилера:</b> ${formatHand(dealerHand, true)}\n\n` +
+      `💰 • Ставка: <b>${formatNumber(bet)}</b> 🍪\n` +
+      `👇 Выберите действие:`;
+
+    const sentMsg = await ctx.reply(msg, {
+      parse_mode: 'HTML',
+      ...getBlackjackKeyboard(userId)
+    });
+
+    // Авто-таймаут на 2 минуты
+    const timer = setTimeout(async () => {
+      if (activeBlackjacks.has(userId)) {
+        activeBlackjacks.delete(userId);
+        ctx.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, null, '⏳ Время хода вышло! Игра завершена по таймауту.').catch(() => {});
+      }
+    }, 120000);
+
+    activeBlackjacks.set(userId, {
+      bet,
+      deck,
+      playerHand,
+      dealerHand,
+      messageId: sentMsg.message_id,
+      chatId: ctx.chat.id,
+      timer
+    });
+
+  } catch (err) {
+    console.error('Ошибка в .блэкджек:', err);
+    ctx.reply('❌ Ошибка игры в Блэкджек.');
+  }
+});
+
+// Кнопка [ Взять карту 🃏 ]
+bot.action(/^bj_hit_(\d+)$/, async (ctx) => {
+  try {
+    const targetUserId = Number(ctx.match[1]);
+    if (ctx.from.id !== targetUserId) {
+      return ctx.answerCbQuery('❌ Это не ваша игра!', { show_alert: true });
+    }
+
+    const game = activeBlackjacks.get(targetUserId);
+    if (!game) {
+      await ctx.answerCbQuery('⏳ Игра уже завершена.', { show_alert: true }).catch(() => {});
+      return ctx.editMessageText('⏳ Игра уже завершена.').catch(() => {});
+    }
+
+    if (game.busy) {
+      return ctx.answerCbQuery().catch(() => {});
+    }
+    game.busy = true;
+
+    const drawnCard = game.deck.pop();
+    if (drawnCard) {
+      game.playerHand.push(drawnCard);
+    }
+    const score = calculateHandScore(game.playerHand);
+
+    if (score > 21) {
+      clearTimeout(game.timer);
+      activeBlackjacks.delete(targetUserId);
+
+      await ctx.answerCbQuery().catch(() => {});
+      const finalUser = await User.findOne({ telegramId: targetUserId });
+      const msg =
+        `🃏 <b>БЛЭКДЖЕК (21)</b>\n\n` +
+        `👤 <b>Ваши карты:</b> ${formatHand(game.playerHand)}\n` +
+        `🤖 <b>Карты дилера:</b> ${formatHand(game.dealerHand)}\n\n` +
+        `💥 • <b>ПЕРЕБОР (${score})!</b> Вы проиграли ${formatNumber(game.bet)} 🍪.\n` +
+        `🍪 • Баланс: <b>${formatNumber(finalUser?.cookies || 0)}</b>`;
+
+      return ctx.editMessageText(msg, { parse_mode: 'HTML' });
+    }
+
+    if (score === 21) {
+      return executeBlackjackStand(ctx, targetUserId, game);
+    }
+
+    const msg =
+      `🃏 <b>БЛЭКДЖЕК (21)</b>\n\n` +
+      `👤 <b>Ваши карты:</b> ${formatHand(game.playerHand)}\n` +
+      `🤖 <b>Карта дилера:</b> ${formatHand(game.dealerHand, true)}\n\n` +
+      `💰 • Ставка: <b>${formatNumber(game.bet)}</b> 🍪\n` +
+      `👇 Выберите действие:`;
+
+    await ctx.editMessageText(msg, {
+      parse_mode: 'HTML',
+      ...getBlackjackKeyboard(targetUserId)
+    });
+    game.busy = false;
+    ctx.answerCbQuery().catch(() => {});
+  } catch (err) {
+    console.error('Ошибка bj_hit:', err);
+  }
+});
+
+// Кнопка [ Хватит 🛑 ]
+bot.action(/^bj_stand_(\d+)$/, async (ctx) => {
+  try {
+    const targetUserId = Number(ctx.match[1]);
+    if (ctx.from.id !== targetUserId) {
+      return ctx.answerCbQuery('❌ Это не ваша игра!', { show_alert: true });
+    }
+
+    const game = activeBlackjacks.get(targetUserId);
+    if (!game) {
+      await ctx.answerCbQuery('⏳ Игра уже завершена.', { show_alert: true }).catch(() => {});
+      return ctx.editMessageText('⏳ Игра уже завершена.').catch(() => {});
+    }
+
+    if (game.busy) {
+      return ctx.answerCbQuery().catch(() => {});
+    }
+    game.busy = true;
+
+    return executeBlackjackStand(ctx, targetUserId, game);
+  } catch (err) {
+    console.error('Ошибка bj_stand:', err);
+  }
+});
+
+async function executeBlackjackStand(ctx, userId, game) {
+  clearTimeout(game.timer);
+  activeBlackjacks.delete(userId);
+
+  while (calculateHandScore(game.dealerHand) < 17) {
+    const nextCard = game.deck.pop();
+    if (!nextCard) break;
+    game.dealerHand.push(nextCard);
+  }
+
+  const playerScore = calculateHandScore(game.playerHand);
+  const dealerScore = calculateHandScore(game.dealerHand);
+
+  let payout = 0;
+  let outcome = '';
+
+  if (dealerScore > 21) {
+    payout = game.bet * 2;
+    outcome = `🎉 • <b>У дилера перебор (${dealerScore})!</b> Вы выиграли: +${formatNumber(game.bet)} 🍪!`;
+  } else if (playerScore > dealerScore) {
+    payout = game.bet * 2;
+    outcome = `➕ • <b>Вы выиграли!</b> (+${formatNumber(game.bet)} 🍪)`;
+  } else if (playerScore < dealerScore) {
+    payout = 0;
+    outcome = `➖ • <b>Дилер победил:</b> (-${formatNumber(game.bet)} 🍪)`;
+  } else {
+    payout = game.bet;
+    outcome = `🤝 • <b>Ничья (${playerScore} : ${dealerScore})!</b> Ставка ${formatNumber(game.bet)} 🍪 возвращена.`;
+  }
+
+  if (payout > 0) {
+    await User.findOneAndUpdate({ telegramId: userId }, { $inc: { cookies: payout } });
+  }
+
+  const finalUser = await User.findOne({ telegramId: userId });
+  const msg =
+    `🃏 <b>БЛЭКДЖЕК (21) — РЕЗУЛЬТАТ</b>\n\n` +
+    `👤 <b>Ваши карты:</b> ${formatHand(game.playerHand)}\n` +
+    `🤖 <b>Карты дилера:</b> ${formatHand(game.dealerHand)}\n\n` +
+    `${outcome}\n` +
+    `🍪 • Баланс: <b>${formatNumber(finalUser?.cookies || 0)}</b>`;
+
+  await ctx.editMessageText(msg, { parse_mode: 'HTML' });
+  ctx.answerCbQuery().catch(() => {});
+}
+
+// === ❌⭕ Крестики-Нолики 3х3 (.кн @user) ===
+bot.hears(/^[.!\/]кн(?:\s+(@\w+))?$/i, async (ctx) => {
+  try {
+    let opponentId = null;
+    if (ctx.match[1]) {
+      const username = ctx.match[1].slice(1);
+      const targetUser = await User.findOne({ username: new RegExp(`^${username}$`, 'i') });
+      if (!targetUser) return ctx.reply('❌ Пользователь с таким @username не найден в базе бота.');
+      opponentId = targetUser.telegramId;
+    } else if (ctx.message.reply_to_message) {
+      opponentId = ctx.message.reply_to_message.from.id;
+    } else {
+      return ctx.reply('❌ Укажите соперника через ответ на сообщение или <code>.кн @username</code>', { parse_mode: 'HTML' });
+    }
+
+    if (opponentId === ctx.from.id) {
+      return ctx.reply('❌ Нельзя играть в крестики-нолики с самим собой!');
+    }
+
+    const [u1, u2] = await Promise.all([
+      User.findOne({ telegramId: ctx.from.id }),
+      User.findOne({ telegramId: opponentId })
+    ]);
+
+    const p1Nick = u1?.nickname || `Игрок 1`;
+    const p2Nick = u2?.nickname || `Игрок 2`;
+
+    const gameId = `${ctx.from.id}-${opponentId}-${Date.now()}`;
+    const board = Array(9).fill(null);
+
+    const msg =
+      `⚔️ <b>ДУЭЛЬ: КРЕСТИКИ-НОЛИКИ</b>\n\n` +
+      `❌ <a href="tg://user?id=${ctx.from.id}">${escapeHtml(p1Nick)}</a> VS ⭕ <a href="tg://user?id=${opponentId}">${escapeHtml(p2Nick)}</a>\n\n` +
+      `👉 <b>Первый ход:</b> ❌ <a href="tg://user?id=${ctx.from.id}">${escapeHtml(p1Nick)}</a>`;
+
+    const sent = await ctx.reply(msg, {
+      parse_mode: 'HTML',
+      ...getTicTacToeKeyboard(gameId, board, false)
+    });
+
+    const timer = setTimeout(() => {
+      activeTicTacToe.delete(gameId);
+    }, 180000);
+
+    activeTicTacToe.set(gameId, {
+      playerX: { id: ctx.from.id, nick: p1Nick },
+      playerO: { id: opponentId, nick: p2Nick },
+      board,
+      turn: 'X',
+      chatId: ctx.chat.id,
+      messageId: sent.message_id,
+      timer
+    });
+
+  } catch (err) {
+    console.error('Ошибка в .кн:', err);
+    ctx.reply('❌ Ошибка при запуске крестиков-ноликов.');
+  }
+});
+
+// Заглушка для занятых или завершенных клеток
+bot.action(/^ttt_noop(?:_.*)?$/, async (ctx) => {
+  return ctx.answerCbQuery().catch(() => {});
+});
+
+bot.action(/^ttt_m_([0-9a-zA-Z-]+)_(\d+)$/, async (ctx) => {
+  try {
+    const gameId = ctx.match[1];
+    const cellIdx = Number(ctx.match[2]);
+
+    const game = activeTicTacToe.get(gameId);
+    if (!game) {
+      return ctx.answerCbQuery('⏳ Игра уже завершена.', { show_alert: true });
+    }
+
+    if (game.busy) {
+      return ctx.answerCbQuery().catch(() => {});
+    }
+
+    if (ctx.from.id !== game.playerX.id && ctx.from.id !== game.playerO.id) {
+      return ctx.answerCbQuery('❌ Вы не участвуете в этой дуэли!', { show_alert: true });
+    }
+
+    const currentExpectedId = game.turn === 'X' ? game.playerX.id : game.playerO.id;
+    if (ctx.from.id !== currentExpectedId) {
+      return ctx.answerCbQuery('❌ Сейчас не ваш ход!', { show_alert: true });
+    }
+
+    if (game.board[cellIdx] !== null) {
+      return ctx.answerCbQuery('❌ Клетка уже занята!', { show_alert: true });
+    }
+
+    game.busy = true;
+    game.board[cellIdx] = game.turn;
+    const winner = checkTicTacToeWinner(game.board);
+
+    if (winner) {
+      clearTimeout(game.timer);
+      activeTicTacToe.delete(gameId);
+
+      let resultText = '';
+      if (winner === 'draw') {
+        resultText = `🤝 <b>Ничья!</b> Никто не уступил в этой схватке!`;
+      } else {
+        const winPlayer = winner === 'X' ? game.playerX : game.playerO;
+        resultText = `🏆 <b>Победа!</b> Игрок ${winner === 'X' ? '❌' : '⭕'} <a href="tg://user?id=${winPlayer.id}">${escapeHtml(winPlayer.nick)}</a> одержал верх!`;
+      }
+
+      const msg =
+        `⚔️ <b>ДУЭЛЬ: КРЕСТИКИ-НОЛИКИ</b>\n\n` +
+        `❌ <a href="tg://user?id=${game.playerX.id}">${escapeHtml(game.playerX.nick)}</a> VS ⭕ <a href="tg://user?id=${game.playerO.id}">${escapeHtml(game.playerO.nick)}</a>\n\n` +
+        `${resultText}`;
+
+      await ctx.editMessageText(msg, {
+        parse_mode: 'HTML',
+        ...getTicTacToeKeyboard(gameId, game.board, true)
+      });
+      return ctx.answerCbQuery().catch(() => {});
+    }
+
+    game.turn = game.turn === 'X' ? 'O' : 'X';
+    const nextPlayer = game.turn === 'X' ? game.playerX : game.playerO;
+    const nextSign = game.turn === 'X' ? '❌' : '⭕';
+
+    const msg =
+      `⚔️ <b>ДУЭЛЬ: КРЕСТИКИ-НОЛИКИ</b>\n\n` +
+      `❌ <a href="tg://user?id=${game.playerX.id}">${escapeHtml(game.playerX.nick)}</a> VS ⭕ <a href="tg://user?id=${game.playerO.id}">${escapeHtml(game.playerO.nick)}</a>\n\n` +
+      `👉 <b>Ход делает:</b> ${nextSign} <a href="tg://user?id=${nextPlayer.id}">${escapeHtml(nextPlayer.nick)}</a>`;
+
+    await ctx.editMessageText(msg, {
+      parse_mode: 'HTML',
+      ...getTicTacToeKeyboard(gameId, game.board, false)
+    });
+    game.busy = false;
+    ctx.answerCbQuery().catch(() => {});
+
+  } catch (err) {
+    console.error('Ошибка хода в крестики-нолики:', err);
+  }
+});
+
+// === 🔮 Гороскоп (.гороскоп <знак>) ===
+bot.hears(/^[.!\/]гороскоп(?:\s+(\S+))?$/i, async (ctx) => {
+  try {
+    const rawSign = ctx.match[1];
+    if (!rawSign) {
+      const signsList = Object.values(ZODIAC_SIGNS).map(s => `${s.emoji} ${s.name}`).join(' • ');
+      return ctx.reply(
+        `🔮 <b>ГОРОСКОП GRIZZLY • CELYA</b>\n\n` +
+        `Укажите ваш знак зодиака:\n` +
+        `<code>.гороскоп <знак></code>\n\n` +
+        `✨ <b>Знаки:</b>\n${signsList}`,
+        { parse_mode: 'HTML' }
+      );
+    }
+
+    const h = getDailyHoroscope(rawSign);
+    if (!h) {
+      return ctx.reply('❌ Неизвестный знак зодиака. Доступно: Овен, Телец, Близнецы, Рак, Лев, Дева, Весы, Скорпион, Стрелец, Козерог, Водолей, Рыбы.');
+    }
+
+    const msg =
+      `✨ <b>АСТРОПРОГНОЗ ДЛЯ ЗНАКА: ${h.emoji} ${h.name.toUpperCase()}</b>\n` +
+      `📅 <i>Период: ${h.dates}</i>\n\n` +
+      `🌟 <b>Общий настрой:</b>\n${h.phrase}\n\n` +
+      `💖 <b>Любовь и чувства:</b>\n${h.love}\n\n` +
+      `🍀 <b>Удача дня:</b> ${h.luck}%\n` +
+      `🔢 <b>Счастливое число:</b> ${h.luckyNum}\n` +
+      `💫 <b>Совместимость сегодня:</b> ${h.compatibleSign}`;
+
+    return ctx.reply(msg, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error('Ошибка в .гороскоп:', err);
+    ctx.reply('❌ Произошла ошибка.');
+  }
+});
+
+// === 🔮 Магический шар (.шар <вопрос>) ===
+bot.hears(/^[.!\/]шар(?:\s+([\s\S]+))?$/i, async (ctx) => {
+  try {
+    const question = ctx.match[1]?.trim();
+    if (!question) {
+      return ctx.reply('🔮 <i>Задайте вопрос магическому шару:</i>\n<code>.шар Будет ли сегодня хороший день?</code>', { parse_mode: 'HTML' });
+    }
+    const answer = getMagicBallAnswer();
+    return ctx.reply(`🔮 <b>Магический шар отвечает:</b>\n\n<blockquote>«${answer}»</blockquote>`, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error('Ошибка в .шар:', err);
+  }
+});
+
+// === 🎲 Рандомайзер вероятностей (.инфа <текст>) ===
+bot.hears(/^[.!\/]инфа(?:\s+([\s\S]+))?$/i, async (ctx) => {
+  try {
+    const text = ctx.match[1]?.trim();
+    if (!text) {
+      return ctx.reply('🎲 <i>Укажите событие для расчета вероятности:</i>\n<code>.инфа меня сегодня поцелуют</code>', { parse_mode: 'HTML' });
+    }
+    const { percent, comment } = getProbability(text);
+    return ctx.reply(`🎲 <b>Вероятность:</b> <b>${percent}%</b>\n💡 <i>${comment}</i>`, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error('Ошибка в .инфа:', err);
+  }
+});
+
+// === ⚖️ Выбор варианта (.выбери <1> или <2>) ===
+bot.hears(/^[.!\/]выбери(?:\s+([\s\S]+))?$/i, async (ctx) => {
+  try {
+    const text = ctx.match[1]?.trim();
+    if (!text) {
+      return ctx.reply('⚖️ <i>Пример:</i> <code>.выбери чай или кофе</code>', { parse_mode: 'HTML' });
+    }
+    const options = text.split(/\s+или\s+|\s*,\s*/i).map(s => s.trim()).filter(Boolean);
+    if (options.length < 2) {
+      return ctx.reply('❌ Укажите как минимум два варианта через «или»!\n💡 Пример: <code>.выбери кино или прогулка</code>', { parse_mode: 'HTML' });
+    }
+    const choice = options[Math.floor(Math.random() * options.length)];
+    return ctx.reply(`🔮 Звёзды шепчут, что лучший выбор — <b>${escapeHtml(choice)}</b>!`, { parse_mode: 'HTML' });
+  } catch (err) {
+    console.error('Ошибка в .выбери:', err);
+  }
+});
+
+// === 📖 Главное интерактивное меню помощи (.помощь / /help) ===
+bot.hears(/^[.!\/](?:помощь|help)$/i, async (ctx) => {
+  try {
+    const { text, keyboard } = getHelpMainMenu();
+    return ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+  } catch (err) {
+    console.error('Ошибка в .помощь:', err);
+  }
+});
+
+bot.action(/^help_cat_(relations|games|economy|photo|admin|fun)$/, async (ctx) => {
+  try {
+    const cat = ctx.match[1];
+    const { text, keyboard } = getHelpCategoryContent(cat);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+    ctx.answerCbQuery().catch(() => {});
+  } catch (err) {
+    console.error('Ошибка help_cat:', err);
+  }
+});
+
+bot.action('help_main', async (ctx) => {
+  try {
+    const { text, keyboard } = getHelpMainMenu();
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+    ctx.answerCbQuery().catch(() => {});
+  } catch (err) {
+    console.error('Ошибка help_main:', err);
+  }
+});
 
   
 // =============================================================
