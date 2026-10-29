@@ -1,10 +1,19 @@
 'use strict';
 
 const assert = require('assert');
-const { initUltimateTicTacToe, challenges, activeGames, userActiveGame, userPendingChallenge } = require('../src/games/ultimateTicTacToe');
+const {
+  initTicTacToe,
+  challenges,
+  activeGames,
+  finishedGames,
+  userActiveGame,
+  userPendingChallenge,
+  messageToGame,
+  TicTacToeGame
+} = require('../src/games/ticTacToe');
 
 async function testBotIntegration() {
-  console.log('--- Starting Bot Integration Tests ---');
+  console.log('--- Starting Bot Integration Tests (3x3 Tic-Tac-Toe & Rich Buttons) ---');
 
   const hearsHandlers = [];
   const actionHandlers = [];
@@ -35,11 +44,11 @@ async function testBotIntegration() {
   };
 
   // Initialize
-  initUltimateTicTacToe(mockBot, { User: mockUser });
+  initTicTacToe(mockBot, { User: mockUser });
 
   console.log(`Registered ${hearsHandlers.length} hears handlers and ${actionHandlers.length} action handlers.`);
   assert.ok(hearsHandlers.length >= 5);
-  assert.ok(actionHandlers.length >= 6);
+  assert.ok(actionHandlers.length >= 4);
 
   function findHears(text) {
     for (const h of hearsHandlers) {
@@ -75,7 +84,7 @@ async function testBotIntegration() {
       message: { text: '.кн' },
       reply: (text) => { repliedText = text; }
     });
-    assert.ok(repliedText.includes('Супер Крестики-Нолики'));
+    assert.ok(repliedText.includes('Крестики-Нолики 3×3') || repliedText.includes('Крестики-Нолики'));
     assert.ok(repliedText.includes('Правила игры:'));
     console.log('✓ Passed');
   }
@@ -83,7 +92,7 @@ async function testBotIntegration() {
   // 2. Test .кн вызов with @username
   let challengeId = null;
   {
-    console.log('[Integration 2] .кн вызов @charlie');
+    console.log('[Integration 2] .кн вызов @charlie (Rich buttons & inline fallback)');
     const matched = findHears('.кн вызов @charlie');
     assert.ok(matched);
 
@@ -103,6 +112,10 @@ async function testBotIntegration() {
     assert.ok(sentMsg);
     assert.ok(sentMsg.text.includes('Вызов на битву'));
     assert.ok(sentMsg.text.includes('Charlie'));
+    assert.ok(sentMsg.text.includes('<tg-button-row align="center">'));
+    assert.ok(sentMsg.text.includes('style="success"'));
+    assert.ok(sentMsg.text.includes('style="danger"'));
+    assert.ok(sentMsg.extra?.reply_markup?.inline_keyboard);
 
     challengeId = userPendingChallenge.get(101);
     assert.ok(challengeId);
@@ -113,7 +126,7 @@ async function testBotIntegration() {
   // 3. Test Unauthorized Accept via button
   {
     console.log('[Integration 3] Unauthorized user clicks accept');
-    const actionMatch = findAction(`utt_acc_${challengeId}`);
+    const actionMatch = findAction(`ttt_acc_${challengeId}`);
     assert.ok(actionMatch);
 
     let alertMsg = '';
@@ -134,7 +147,7 @@ async function testBotIntegration() {
   let gameId = null;
   {
     console.log('[Integration 4] Target accepts via button');
-    const actionMatch = findAction(`utt_acc_${challengeId}`);
+    const actionMatch = findAction(`ttt_acc_${challengeId}`);
     assert.ok(actionMatch);
 
     let editedText = '';
@@ -142,7 +155,7 @@ async function testBotIntegration() {
     const ctx = {
       from: { id: 303 }, // Charlie
       match: actionMatch.match,
-      callbackQuery: true,
+      callbackQuery: { message: { message_id: 555 } },
       editMessageText: async (text, extra) => {
         editedText = text;
         editedKeyboard = extra;
@@ -151,8 +164,9 @@ async function testBotIntegration() {
     };
 
     await actionMatch.handler(ctx);
-    assert.ok(editedText.includes('Супер Крестики-Нолики'));
+    assert.ok(editedText.includes('Крестики-Нолики 3×3'));
     assert.ok(editedText.includes('Ход:'));
+    assert.ok(editedText.includes('<tg-button-row align="center">'));
     assert.ok(editedKeyboard);
 
     gameId = userActiveGame.get(303);
@@ -165,7 +179,7 @@ async function testBotIntegration() {
   {
     console.log('[Integration 5] Bob/Charlie tries to move out of turn');
     // First turn is Alice (X, id: 101)
-    const actionMatch = findAction(`utt_c_${gameId}_4_0`);
+    const actionMatch = findAction(`ttt_m_4`);
     assert.ok(actionMatch);
 
     let alertMsg = '';
@@ -180,15 +194,77 @@ async function testBotIntegration() {
     console.log('✓ Passed');
   }
 
-  // 6. Test Gameplay: Alice makes valid move in Sector 4, Cell 0
+  // 6. Test Gameplay: Alice makes valid move in Cell 4
   {
-    console.log('[Integration 6] Alice moves in Sector 4, Cell 0');
-    const actionMatch = findAction(`utt_c_${gameId}_4_0`);
+    console.log('[Integration 6] Alice moves in Cell 4 (Center)');
+    const actionMatch = findAction(`ttt_m_4`);
+    assert.ok(actionMatch);
+
+    let updatedText = '';
+    let updatedKeyboard = null;
+    const ctx = {
+      from: { id: 101 }, // Alice (X)
+      match: actionMatch.match,
+      editMessageText: async (text, extra) => {
+        updatedText = text;
+        updatedKeyboard = extra;
+      },
+      answerCbQuery: async () => {}
+    };
+
+    await actionMatch.handler(ctx);
+    const game = activeGames.get(gameId);
+    assert.strictEqual(game.board[4], 'X');
+    assert.strictEqual(game.currentTurn, 'O');
+    assert.ok(updatedText.includes('<tg-button type="callback_data" style="danger" data="ttt_m_4">❌</tg-button>'));
+    console.log('✓ Passed');
+  }
+
+  // 7. Test Gameplay: Occupied cell click rejected
+  {
+    console.log('[Integration 7] Charlie tries to move in already occupied Cell 4');
+    const actionMatch = findAction(`ttt_m_4`);
+    assert.ok(actionMatch);
+
+    let alertMsg = '';
+    const ctx = {
+      from: { id: 303 }, // Charlie (O)
+      match: actionMatch.match,
+      answerCbQuery: async (msg, opts) => { alertMsg = msg; }
+    };
+
+    await actionMatch.handler(ctx);
+    assert.ok(alertMsg.includes('уже занята'));
+    console.log('✓ Passed');
+  }
+
+  // 7a. Test Spectator click rejected
+  {
+    console.log('[Integration 7a] Spectator click rejected');
+    const actionMatch = findAction(`ttt_m_0`);
+    assert.ok(actionMatch);
+
+    let alertMsg = '';
+    const ctx = {
+      from: { id: 77777 }, // spectator
+      match: actionMatch.match,
+      answerCbQuery: async (msg, opts) => { alertMsg = msg; }
+    };
+
+    await actionMatch.handler(ctx);
+    assert.ok(alertMsg.includes('не участвуете в этой игре'));
+    console.log('✓ Passed');
+  }
+
+  // 7b. Test Charlie makes valid move in Cell 0
+  {
+    console.log('[Integration 7b] Charlie moves in Cell 0');
+    const actionMatch = findAction(`ttt_m_0`);
     assert.ok(actionMatch);
 
     let updatedText = '';
     const ctx = {
-      from: { id: 101 }, // Alice (X)
+      from: { id: 303 }, // Charlie (O)
       match: actionMatch.match,
       editMessageText: async (text) => { updatedText = text; },
       answerCbQuery: async () => {}
@@ -196,85 +272,16 @@ async function testBotIntegration() {
 
     await actionMatch.handler(ctx);
     const game = activeGames.get(gameId);
-    assert.strictEqual(game.cells[4][0], 'X');
-    assert.strictEqual(game.activeSector, 0, 'Next active sector must be 0');
-    assert.strictEqual(game.currentTurn, 'O');
-    console.log('✓ Passed');
-  }
-
-  // 7. Test Switch View to Map
-  {
-    console.log('[Integration 7] Switch View to Map');
-    const actionMatch = findAction(`utt_v_${gameId}_map`);
-    assert.ok(actionMatch);
-
-    const ctx = {
-      from: { id: 303 },
-      match: actionMatch.match,
-      editMessageText: async () => {},
-      answerCbQuery: async () => {}
-    };
-
-    await actionMatch.handler(ctx);
-    const game = activeGames.get(gameId);
-    assert.strictEqual(game.viewMode, 'map');
-    console.log('✓ Passed');
-  }
-
-  // 7a. Test Inactive Player cannot navigate or pick sector during opponent's turn
-  {
-    console.log('[Integration 7a] Inactive Player navigation rejected');
-    // It is Charlie's (303) turn. Alice (101) tries to switch view.
-    const actionMatch = findAction(`utt_v_${gameId}_sec`);
-    assert.ok(actionMatch);
-
-    let alertMsg = '';
-    const ctx = {
-      from: { id: 101 }, // Alice (inactive)
-      match: actionMatch.match,
-      answerCbQuery: async (msg, opts) => { alertMsg = msg; }
-    };
-
-    await actionMatch.handler(ctx);
-    assert.ok(alertMsg.includes('Сейчас ход соперника'));
-
-    // Inactive player also cannot pick sector
-    const sectorMatch = findAction(`utt_s_${gameId}_2`);
-    assert.ok(sectorMatch);
-    let sectorAlert = '';
-    await sectorMatch.handler({
-      from: { id: 101 },
-      match: sectorMatch.match,
-      answerCbQuery: async (msg) => { sectorAlert = msg; }
-    });
-    assert.ok(sectorAlert.includes('Сейчас ход соперника'));
-    console.log('✓ Passed');
-  }
-
-  // 7b. Test Active Player switches back to sector view via [ 🎯 Текущий сектор ]
-  {
-    console.log('[Integration 7b] Active player returns to sector view');
-    const actionMatch = findAction(`utt_v_${gameId}_sec`);
-    assert.ok(actionMatch);
-
-    const ctx = {
-      from: { id: 303 }, // Charlie (active)
-      match: actionMatch.match,
-      editMessageText: async () => {},
-      answerCbQuery: async () => {}
-    };
-
-    await actionMatch.handler(ctx);
-    const game = activeGames.get(gameId);
-    assert.strictEqual(game.viewMode, 'sector');
-    assert.strictEqual(game.viewSector, 0);
+    assert.strictEqual(game.board[0], 'O');
+    assert.strictEqual(game.currentTurn, 'X');
+    assert.ok(updatedText.includes('<tg-button type="callback_data" style="success" data="ttt_m_0">⭕</tg-button>'));
     console.log('✓ Passed');
   }
 
   // 8. Test Surrender
   {
     console.log('[Integration 8] Charlie surrenders');
-    const actionMatch = findAction(`utt_sur_${gameId}`);
+    const actionMatch = findAction(`ttt_sur`);
     assert.ok(actionMatch);
 
     let surrenderText = '';
@@ -294,9 +301,9 @@ async function testBotIntegration() {
     console.log('✓ Passed');
   }
 
-  // 9. Test .кн вызов via Reply to message
+  // 9. Test .кн вызов via Reply to message & text decline .кн нет
   {
-    console.log('[Integration 9] .кн вызов via Reply');
+    console.log('[Integration 9] .кн вызов via Reply & text decline .кн нет');
     const matched = findHears('.кн вызов');
     assert.ok(matched);
 
@@ -380,6 +387,238 @@ async function testBotIntegration() {
       message: { text: '.кн нет' },
       reply: async () => {}
     });
+    console.log('✓ Passed');
+  }
+
+  // 11. Test Full Game: Complete Win Sequence (3 in a row)
+  {
+    console.log('[Integration 11] Full Game: Alice wins with 3 in a row');
+    // Challenge
+    const callMatch = findHears('.кн вызов @charlie');
+    await callMatch.handler({
+      from: { id: 101, first_name: 'Alice' },
+      chat: { id: 999 },
+      message: { text: '.кн вызов @charlie' },
+      reply: async () => ({ message_id: 888 })
+    });
+    const cId = userPendingChallenge.get(101);
+
+    // Charlie accepts
+    const accMatch = findAction(`ttt_acc_${cId}`);
+    await accMatch.handler({
+      from: { id: 303 },
+      match: accMatch.match,
+      callbackQuery: { message: { message_id: 888 } },
+      editMessageText: async () => {},
+      answerCbQuery: async () => {}
+    });
+
+    const gId = userActiveGame.get(101);
+    assert.ok(gId);
+
+    // Helper to make a move via action handler
+    async function doMove(userId, cell) {
+      const match = findAction(`ttt_m_${cell}`);
+      let editedText = '';
+      await match.handler({
+        from: { id: userId },
+        match: match.match,
+        editMessageText: async (text) => { editedText = text; },
+        answerCbQuery: async () => {}
+      });
+      return editedText;
+    }
+
+    // Moves: Alice=0, Charlie=3, Alice=1, Charlie=4, Alice=2 (Row 0 win)
+    await doMove(101, 0); // X at 0
+    await doMove(303, 3); // O at 3
+    await doMove(101, 1); // X at 1
+    await doMove(303, 4); // O at 4
+    const finalMsg = await doMove(101, 2); // X at 2 -> WIN!
+
+    assert.ok(finalMsg.includes('ПОБЕДА'));
+    assert.ok(finalMsg.includes('Alice'));
+    assert.ok(!finalMsg.includes('🏳️ Сдаться')); // Surrender button removed
+    assert.strictEqual(userActiveGame.has(101), false, 'Active game must be cleared');
+    assert.strictEqual(userActiveGame.has(303), false, 'Active game must be cleared');
+    console.log('✓ Passed');
+  }
+
+  // 12. Test Full Game: Draw Sequence
+  {
+    console.log('[Integration 12] Full Game: 9 moves to Draw');
+    const callMatch = findHears('.кн вызов @charlie');
+    await callMatch.handler({
+      from: { id: 101, first_name: 'Alice' },
+      chat: { id: 999 },
+      message: { text: '.кн вызов @charlie' },
+      reply: async () => ({ message_id: 999 })
+    });
+    const cId = userPendingChallenge.get(101);
+
+    const accMatch = findAction(`ttt_acc_${cId}`);
+    await accMatch.handler({
+      from: { id: 303 },
+      match: accMatch.match,
+      callbackQuery: { message: { message_id: 999 } },
+      editMessageText: async () => {},
+      answerCbQuery: async () => {}
+    });
+
+    async function doMove(userId, cell) {
+      const match = findAction(`ttt_m_${cell}`);
+      let editedText = '';
+      await match.handler({
+        from: { id: userId },
+        match: match.match,
+        editMessageText: async (text) => { editedText = text; },
+        answerCbQuery: async () => {}
+      });
+      return editedText;
+    }
+
+    // Draw board:
+    // X O X
+    // X O O
+    // O X X
+    // Order:
+    // X: 0, O: 1
+    // X: 2, O: 4
+    // X: 3, O: 5
+    // X: 7, O: 6
+    // X: 8
+    await doMove(101, 0);
+    await doMove(303, 1);
+    await doMove(101, 2);
+    await doMove(303, 4);
+    await doMove(101, 3);
+    await doMove(303, 5);
+    await doMove(101, 7);
+    await doMove(303, 6);
+    const drawMsg = await doMove(101, 8);
+
+    assert.ok(drawMsg.includes('Ничья!'));
+    assert.ok(!drawMsg.includes('🏳️ Сдаться'));
+    assert.strictEqual(userActiveGame.has(101), false);
+    assert.strictEqual(userActiveGame.has(303), false);
+    console.log('✓ Passed');
+  }
+
+  // 13. Test click on finished game message answers with 'Игра уже завершена.'
+  {
+    console.log('[Integration 13] Click on finished game message alerts "Игра уже завершена."');
+    const match = findAction('ttt_m_5');
+    let alertMsg = '';
+    await match.handler({
+      from: { id: 101 },
+      match: match.match,
+      callbackQuery: { message: { message_id: 999 } },
+      answerCbQuery: async (msg) => { alertMsg = msg; },
+      editMessageText: async () => {}
+    });
+    assert.strictEqual(alertMsg, 'Игра уже завершена.');
+    console.log('✓ Passed');
+  }
+
+  // 14. Test Cross-Game Message Isolation
+  {
+    console.log('[Integration 14] Cross-Game Message Isolation: Bob in Game 2 cannot hijack Game 1');
+    const g1 = new TicTacToeGame('g1_iso', { id: 101, name: 'Alice' }, { id: 102, name: 'Charlie' }, 999, 1001);
+    const g2 = new TicTacToeGame('g2_iso', { id: 201, name: 'Bob' }, { id: 202, name: 'Dave' }, 999, 2002);
+
+    activeGames.set(g1.id, g1);
+    userActiveGame.set(101, g1.id);
+    userActiveGame.set(102, g1.id);
+    messageToGame.set(1001, g1.id);
+
+    activeGames.set(g2.id, g2);
+    userActiveGame.set(201, g2.id);
+    userActiveGame.set(202, g2.id);
+    messageToGame.set(2002, g2.id);
+
+    // Bob (201) clicks cell 4 on Game 1's message (1001)!
+    const match = findAction('ttt_m_4');
+    let alertMsg = '';
+    let edited = false;
+
+    await match.handler({
+      from: { id: 201 },
+      match: match.match,
+      callbackQuery: { message: { message_id: 1001 } },
+      answerCbQuery: async (msg) => { alertMsg = msg; },
+      editMessageText: async () => { edited = true; }
+    });
+
+    assert.ok(alertMsg.includes('не участвуете в этой игре'), `Expected spectator rejection, got: ${alertMsg}`);
+    assert.strictEqual(edited, false, 'Message 1001 must NOT be edited');
+    assert.strictEqual(g1.board[4], null, 'Game 1 board must be untouched');
+    assert.strictEqual(g2.board[4], null, 'Game 2 board must be untouched');
+
+    // Clean up test games
+    activeGames.delete(g1.id);
+    activeGames.delete(g2.id);
+    userActiveGame.delete(101);
+    userActiveGame.delete(102);
+    userActiveGame.delete(201);
+    userActiveGame.delete(202);
+    messageToGame.delete(1001);
+    messageToGame.delete(2002);
+    console.log('✓ Passed');
+  }
+
+  // 15. Test text_mention resolution for user without username
+  {
+    console.log('[Integration 15] .кн вызов resolves target from text_mention entity');
+    const matched = findHears('.кн вызов John');
+    assert.ok(matched);
+
+    let sentMsg = null;
+    await matched.handler({
+      from: { id: 101, first_name: 'Alice' },
+      chat: { id: 999 },
+      message: {
+        text: '.кн вызов John',
+        entities: [
+          {
+            type: 'text_mention',
+            offset: 10,
+            length: 4,
+            user: { id: 777, first_name: 'John Doe', is_bot: false }
+          }
+        ]
+      },
+      reply: async (text, extra) => {
+        sentMsg = { text, extra, message_id: 3333 };
+        return sentMsg;
+      }
+    });
+
+    assert.ok(sentMsg);
+    assert.ok(sentMsg.text.includes('John Doe'));
+    const pendingChalId = userPendingChallenge.get(101);
+    assert.ok(pendingChalId);
+    assert.strictEqual(userPendingChallenge.get(777), pendingChalId);
+
+    // Clean up
+    challenges.delete(pendingChalId);
+    userPendingChallenge.delete(101);
+    userPendingChallenge.delete(777);
+    console.log('✓ Passed');
+  }
+
+  // 16. Test Surrender on finished game
+  {
+    console.log('[Integration 16] Surrender on finished game alerts "Игра уже завершена."');
+    const match = findAction('ttt_sur');
+    let alertMsg = '';
+    await match.handler({
+      from: { id: 101 },
+      match: match.match,
+      callbackQuery: { message: { message_id: 999 } },
+      answerCbQuery: async (msg) => { alertMsg = msg; },
+      editMessageText: async () => {}
+    });
+    assert.strictEqual(alertMsg, 'Игра уже завершена.');
     console.log('✓ Passed');
   }
 

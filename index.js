@@ -8,7 +8,7 @@ const ytdl = require('ytdl-core');
 const util = require('util');
 const axios = require('axios');
 const { createCanvas, loadImage, registerFont } = require('canvas');
-const { initUltimateTicTacToe } = require('./src/games/ultimateTicTacToe');
+const { initTicTacToe } = require('./src/games/ticTacToe');
 // Регистрация шрифта для Canvas 1 раз при старте
 try {
   const fontPath = './CirceRounded-Regular4.ttf';
@@ -214,8 +214,8 @@ function shuffleArray(array) {
   return shuffledArray;
 }
 
-// ⚡ Инициализация игры «Супер Крестики-Нолики» (Ultimate Tic-Tac-Toe)
-initUltimateTicTacToe(bot, { User, utils });
+// ⚡ Инициализация игры «Крестики-Нолики 3х3» (Telegram 10.3+ Rich Buttons)
+initTicTacToe(bot, { User, utils });
 
 bot.start(async (ctx) => {
 /*  const referralCode = ctx.message.text.split(' ')[1];

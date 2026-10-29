@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node test/ultimateTicTacToe.test.js && node test/botIntegration.test.js"
+    "test": "node test/ticTacToe.test.js && node test/botIntegration.test.js"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
