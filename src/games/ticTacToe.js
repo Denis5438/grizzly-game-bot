@@ -221,8 +221,7 @@ function renderGameMessage(game) {
     header += `🎉 Поздравляем победителя!\n\n`;
   }
 
-  const buttons = renderRichButtons(game);
-  return header + buttons;
+  return header.trim();
 }
 
 /**
@@ -261,21 +260,12 @@ function buildChallengeMessage(sender, target, challengeId = 'ID') {
   if (target.username) {
     targetDisplay = targetDisplay ? `${targetDisplay} (@${escapeHtml(target.username)})` : `@${escapeHtml(target.username)}`;
   }
-  let text = (
+  return (
     `⚔️ <b>Вызов на битву в Крестики-Нолики!</b>\n` +
     `👤 <b>Игрок 1:</b> ${escapeHtml(sender.name)} (❌)\n` +
     `🎯 <b>Соперник:</b> ${targetDisplay} (⭕)\n\n` +
     `⏳ <i>Ожидание подтверждения: 2 минуты</i>`
   );
-
-  text += (
-    `\n\n<tg-button-row align="center">\n` +
-    `  <tg-button type="callback_data" style="success" data="ttt_acc_${challengeId}">⚔️ Принять вызов</tg-button>\n` +
-    `  <tg-button type="callback_data" style="danger" data="ttt_dec_${challengeId}">❌ Отклонить</tg-button>\n` +
-    `</tg-button-row>`
-  );
-
-  return text;
 }
 
 /**
@@ -681,7 +671,10 @@ function initTicTacToe(bot, { User } = {}) {
       }
 
       if (target.notFound) {
-        return ctx.reply(`❌ Пользователь ${escapeHtml(target.query)} не найден в базе данных бота.`, { parse_mode: 'HTML' });
+        return ctx.reply(
+          `❌ Пользователь <b>${escapeHtml(target.query)}</b> не найден в базе данных бота.\n💡 <i>Ответьте на его сообщение командой <code>.кн вызов</code> или попросите его написать боту /start</i>`,
+          { parse_mode: 'HTML' }
+        );
       }
 
       if (target.id === sender.id) {

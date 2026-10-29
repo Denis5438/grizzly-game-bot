@@ -112,9 +112,6 @@ async function testBotIntegration() {
     assert.ok(sentMsg);
     assert.ok(sentMsg.text.includes('Вызов на битву'));
     assert.ok(sentMsg.text.includes('Charlie'));
-    assert.ok(sentMsg.text.includes('<tg-button-row align="center">'));
-    assert.ok(sentMsg.text.includes('style="success"'));
-    assert.ok(sentMsg.text.includes('style="danger"'));
     assert.ok(sentMsg.extra?.reply_markup?.inline_keyboard);
 
     challengeId = userPendingChallenge.get(101);
@@ -166,7 +163,6 @@ async function testBotIntegration() {
     await actionMatch.handler(ctx);
     assert.ok(editedText.includes('Крестики-Нолики 3×3'));
     assert.ok(editedText.includes('Ход:'));
-    assert.ok(editedText.includes('<tg-button-row align="center">'));
     assert.ok(editedKeyboard);
 
     gameId = userActiveGame.get(303);
@@ -216,7 +212,6 @@ async function testBotIntegration() {
     const game = activeGames.get(gameId);
     assert.strictEqual(game.board[4], 'X');
     assert.strictEqual(game.currentTurn, 'O');
-    assert.ok(updatedText.includes('<tg-button type="callback_data" style="danger" data="ttt_m_4">❌</tg-button>'));
     console.log('✓ Passed');
   }
 
@@ -274,7 +269,6 @@ async function testBotIntegration() {
     const game = activeGames.get(gameId);
     assert.strictEqual(game.board[0], 'O');
     assert.strictEqual(game.currentTurn, 'X');
-    assert.ok(updatedText.includes('<tg-button type="callback_data" style="success" data="ttt_m_0">⭕</tg-button>'));
     console.log('✓ Passed');
   }
 

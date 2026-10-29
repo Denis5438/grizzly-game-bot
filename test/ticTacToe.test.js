@@ -197,7 +197,6 @@ async function runTests() {
     assert.ok(msg.includes('Крестики-Нолики 3×3'));
     assert.ok(msg.includes('Ход:'));
     assert.ok(msg.includes('Время на ход: 90 сек'));
-    assert.ok(msg.includes('<tg-button-row align="center">'));
     console.log('✓ Passed');
   }
 
@@ -239,9 +238,6 @@ async function runTests() {
     assert.ok(chalMsg.includes('Alice &lt;Pro&gt;'));
     assert.ok(chalMsg.includes('@bob'));
     assert.ok(chalMsg.includes('2 минуты'));
-    assert.ok(chalMsg.includes('<tg-button-row align="center">'));
-    assert.ok(chalMsg.includes('style="success" data="ttt_acc_chal99"'));
-    assert.ok(chalMsg.includes('style="danger" data="ttt_dec_chal99"'));
 
     const chalKb = buildChallengeKeyboard('chal99');
     assert.strictEqual(chalKb.length, 1);
